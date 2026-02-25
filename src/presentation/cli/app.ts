@@ -112,6 +112,7 @@ export class CliApp {
       outputDir: task.outputDir,
       liveMode: task.liveMode,
       conversion,
+      concurrency: task.concurrency,
     });
 
     const confirmed = await p.confirm({

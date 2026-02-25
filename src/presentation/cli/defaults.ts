@@ -26,7 +26,7 @@ export function getSmartDefaults(videoInfo: VideoInfo): SmartDefaults {
     outputDir: "./downloads",
     filenamePattern: FilenamePattern.TitleId,
     overwrite: OverwriteBehavior.Rename,
-    concurrency: 64,
+    concurrency: 4,
     retries: isLive ? 5 : 3,
     timeout: isLive ? 45 : 30,
   };

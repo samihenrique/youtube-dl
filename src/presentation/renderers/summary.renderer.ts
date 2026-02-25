@@ -11,6 +11,7 @@ interface SummaryOptions {
   outputDir: string;
   liveMode: DownloadMode;
   conversion: ConversionTask | null;
+  concurrency: number;
 }
 
 export function renderVideoCard(info: VideoInfo): void {
@@ -98,6 +99,8 @@ export function renderDownloadSummary(opts: SummaryOptions): void {
       details.push(["Conversão", `${opts.conversion.outputFormat.toUpperCase()}`]);
     }
   }
+
+  details.push(["Concorrência", `${opts.concurrency} downloads paralelos`]);
 
   for (const [label, value] of details) {
     lines.push(`${pc.dim(label.padEnd(12))} ${value}`);

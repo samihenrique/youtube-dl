@@ -160,10 +160,10 @@ export async function promptCustomize(
     {
       concurrency: () =>
         p.text({
-          message: "Downloads paralelos (1-64):",
+          message: "Downloads paralelos (1-256):",
           defaultValue: String(defaults.concurrency),
           placeholder: String(defaults.concurrency),
-          validate: (v) => validateInteger(v, 1, 64, "Downloads paralelos"),
+          validate: (v) => validateInteger(v, 1, 256, "Downloads paralelos"),
         }),
       rateLimit: () =>
         p.text({

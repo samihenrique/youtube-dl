@@ -59,7 +59,7 @@ bun run src/main.ts --url https://youtube.com/watch?v=dQw4w9WgXcQ
 | `--url <url>` | YouTube URL (required in non-interactive) | — |
 | `--quality <q>` | Video quality (best, 1080p, 720p, etc.) | best |
 | `--live-mode <mode>` | Live download mode: `dvr-start` or `live-now` | dvr-start |
-| `--concurrency <n>` | Parallel segment downloads (1-64) | 8 |
+| `--concurrency <n>` | Parallel segment downloads (1-256) | 4 |
 | `--max-duration <s>` | Max duration in seconds | unlimited |
 | `--rate-limit <r>` | Bandwidth limit (e.g., `10M`, `500K`) | unlimited |
 | `--retries <n>` | Retries per segment (0-20) | 3 |
