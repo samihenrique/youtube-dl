@@ -1,11 +1,11 @@
 {
-  "name": "@samihenrique/rush-dl",
+  "name": "@samihenrique/youtube-dl",
   "version": "1.0.0",
   "description": "Ultra-fast YouTube video and live stream downloader CLI with conversion support",
   "module": "src/main.ts",
   "type": "module",
   "bin": {
-    "rush-dl": "./src/main.ts"
+    "youtube-dl": "./src/main.ts"
   },
   "scripts": {
     "start": "bun run src/main.ts",

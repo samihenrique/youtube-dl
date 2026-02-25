@@ -49,14 +49,14 @@ export class CliApp {
   private printBanner(): void {
     console.log();
     console.log(
-      pc.bold(pc.cyan("  rush-dl")) +
+      pc.bold(pc.cyan("  youtube-dl")) +
         pc.dim(" — YouTube downloader ultra-rápido"),
     );
     console.log();
   }
 
   private async runInteractive(): Promise<void> {
-    p.intro(pc.bgCyan(pc.black(" rush-dl ")));
+    p.intro(pc.bgCyan(pc.black(" youtube-dl ")));
 
     let continueLoop = true;
     while (continueLoop) {

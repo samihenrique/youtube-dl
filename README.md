@@ -1,4 +1,4 @@
-# @samihenrique/rush-dl
+# @samihenrique/youtube-dl
 
 Ultra-fast YouTube video and live stream downloader CLI with conversion support. Built with [Bun](https://bun.sh) for maximum performance.
 
@@ -21,14 +21,14 @@ Ultra-fast YouTube video and live stream downloader CLI with conversion support.
 ## Installation
 
 ```bash
-bun install @samihenrique/rush-dl
+bun install @samihenrique/youtube-dl
 ```
 
 Or clone and run locally:
 
 ```bash
-git clone https://github.com/samihenrique/rush-dl.git
-cd rush-dl
+git clone https://github.com/samihenrique/youtube-dl.git
+cd youtube-dl
 bun install
 ```
 
@@ -119,7 +119,7 @@ src/
 bun test
 ```
 
-145 tests covering domain validation, use case orchestration, infrastructure helpers, and input validators.
+149 tests covering domain validation, use case orchestration, infrastructure helpers, and input validators.
 
 ## License
 

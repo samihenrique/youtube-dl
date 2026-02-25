@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**rush-dl** (`@samihenrique/rush-dl`) is a CLI tool for downloading YouTube videos and live streams with parallel segment downloads and post-download ffmpeg conversion. Built with Bun and TypeScript.
+**youtube-dl** (`@samihenrique/youtube-dl`) is a CLI tool for downloading YouTube videos and live streams with parallel segment downloads and post-download ffmpeg conversion. Built with Bun and TypeScript.
 
 ## Commands
 
