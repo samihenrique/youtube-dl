@@ -42,11 +42,15 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
         "-hide_banner",
         "-loglevel",
         "warning",
+        "-fflags",
+        "+genpts+discardcorrupt",
         "-y",
         "-i",
         "pipe:0",
         "-c",
         "copy",
+        "-avoid_negative_ts",
+        "make_zero",
         "-movflags",
         "+faststart",
         options.outputPath,
@@ -188,23 +192,27 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
         ),
       ]);
 
-      console.log("[dash] Muxando vídeo + áudio...");
-
       const mux = Bun.spawn(
         [
           ffmpegBinary,
           "-hide_banner",
           "-loglevel",
           "warning",
-          "-y",
+          "-fflags",
+          "+genpts+discardcorrupt",
           "-i",
           videoTmpPath,
+          "-fflags",
+          "+genpts+discardcorrupt",
           "-i",
           audioTmpPath,
           "-c",
           "copy",
+          "-avoid_negative_ts",
+          "make_zero",
           "-movflags",
           "+faststart",
+          "-y",
           options.outputPath,
         ],
         { stdout: "ignore", stderr: "inherit" },
@@ -244,6 +252,17 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
     let downloadedSegments = 0;
     let nextSqToWrite = startSq;
     const pendingBuffer = new Map<number, Uint8Array>();
+
+    const initSegment = await this.fetchDashSegmentWithRefresh(
+      urlHolder,
+      0,
+      options.retries,
+      options.timeoutSeconds,
+    );
+    if (initSegment) {
+      writer.write(initSegment);
+      downloadedBytes += initSegment.byteLength;
+    }
 
     function drainBuffer(): void {
       while (pendingBuffer.has(nextSqToWrite)) {
@@ -337,7 +356,7 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
     const message =
       lastError instanceof Error ? lastError.message : String(lastError);
     console.error(
-      `[warn] Segmento falhou após ${maxRetries + 1} tentativas: ${message}`,
+      `[warn] Segmento sq=${sq} falhou após ${maxRetries + 1} tentativas: ${message}`,
     );
     return null;
   }
@@ -438,7 +457,6 @@ class RefreshableUrl {
 
   private async _doRefresh(): Promise<boolean> {
     try {
-      console.log("[dash] Renovando URL de download...");
       this._current = await this._refreshFn!();
       this._lastRefreshAt = Date.now();
       return true;
