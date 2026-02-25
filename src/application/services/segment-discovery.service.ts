@@ -7,7 +7,9 @@ export class SegmentDiscoveryService {
   async findEarliestAvailableSq(
     segmentTemplateUrl: string,
     latestSq: number,
+    refreshTemplate?: () => Promise<string>,
   ): Promise<number> {
+    let currentTemplate = segmentTemplateUrl;
     let lowerBound = latestSq;
     let step = 1;
 
@@ -24,8 +26,13 @@ export class SegmentDiscoveryService {
         `[dvr-discovery] Verificando sq ${candidate} (~${estimatedHours}h atrás)...`,
       );
 
-      const exists = await this.checkExists(
-        this.buildUrl(segmentTemplateUrl, candidate),
+      const exists = await this.probeWithRefresh(
+        currentTemplate,
+        candidate,
+        refreshTemplate,
+        (freshTemplate) => {
+          currentTemplate = freshTemplate;
+        },
       );
 
       if (!exists) {
@@ -45,8 +52,13 @@ export class SegmentDiscoveryService {
 
     while (left < right) {
       const mid = Math.floor((left + right) / 2);
-      const exists = await this.checkExists(
-        this.buildUrl(segmentTemplateUrl, mid),
+      const exists = await this.probeWithRefresh(
+        currentTemplate,
+        mid,
+        refreshTemplate,
+        (freshTemplate) => {
+          currentTemplate = freshTemplate;
+        },
       );
       if (exists) {
         right = mid;
@@ -63,5 +75,33 @@ export class SegmentDiscoveryService {
     );
 
     return left;
+  }
+
+  private async probeWithRefresh(
+    template: string,
+    sq: number,
+    refreshTemplate: (() => Promise<string>) | undefined,
+    onRefresh: (freshTemplate: string) => void,
+  ): Promise<boolean> {
+    try {
+      return await this.checkExists(this.buildUrl(template, sq));
+    } catch {
+      if (!refreshTemplate) {
+        return false;
+      }
+
+      console.log(
+        `[dvr-discovery] Autenticação expirada, renovando manifesto...`,
+      );
+
+      const freshTemplate = await refreshTemplate();
+      onRefresh(freshTemplate);
+
+      try {
+        return await this.checkExists(this.buildUrl(freshTemplate, sq));
+      } catch {
+        return false;
+      }
+    }
   }
 }

@@ -102,9 +102,31 @@ export class DownloadLiveUseCase {
     const lastUrl = segmentUrls[segmentUrls.length - 1]!;
     const latestSq = this.hlsParser.extractSqFromUrl(lastUrl);
 
+    const refreshTemplate = async (): Promise<string> => {
+      const freshManifest = await this.fetchText(
+        task.videoInfo.hlsManifestUrl!,
+      );
+      const freshVariants = this.hlsParser.parseVariants(freshManifest);
+      if (freshVariants.length === 0) {
+        throw new DownloadFailedError(
+          "Falha ao renovar manifesto HLS: sem variantes.",
+        );
+      }
+      const freshVariantText = await this.fetchText(freshVariants[0]!.url);
+      const freshSegments =
+        this.hlsParser.parseSegmentUrls(freshVariantText);
+      if (freshSegments.length === 0) {
+        throw new DownloadFailedError(
+          "Falha ao renovar manifesto HLS: sem segmentos.",
+        );
+      }
+      return freshSegments[0]!;
+    };
+
     const earliestSq = await this.segmentDiscovery.findEarliestAvailableSq(
       firstUrl,
       latestSq,
+      refreshTemplate,
     );
 
     let endSq = latestSq;

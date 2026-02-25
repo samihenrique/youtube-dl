@@ -113,9 +113,63 @@ describe("SegmentDiscoveryService", () => {
       latestSq,
     );
 
-    // exponential phase: ~log2(20000) ≈ 15 probes, binary search: ~15 probes
-    // total should be well under 50
     expect(probeCount).toBeLessThan(50);
     expect(probeCount).toBeGreaterThan(0);
+  });
+
+  test("renova template quando checker lança (simula 403 auth expired)", async () => {
+    const latestSq = 20000;
+    const firstAvailable = latestSq - 8640 + 1;
+    const authValidRange = 4096;
+    let refreshCount = 0;
+
+    const service = new SegmentDiscoveryService(
+      async (url) => {
+        const sq = Number(url.match(/sq\/(\d+)/)?.[1]);
+        if (sq < firstAvailable) return false;
+        const hasNewToken = url.includes("fresh-token");
+        const distFromLatest = latestSq - sq;
+        if (!hasNewToken && distFromLatest > authValidRange) {
+          throw new Error("HTTP 403");
+        }
+        return true;
+      },
+      (template, sq) => template.replace(/sq\/\d+/, `sq/${sq}`),
+    );
+
+    const refreshTemplate = async (): Promise<string> => {
+      refreshCount++;
+      return "https://example.com/sq/1/fresh-token/chunk.ts";
+    };
+
+    const earliest = await service.findEarliestAvailableSq(
+      "https://example.com/sq/1/chunk.ts",
+      latestSq,
+      refreshTemplate,
+    );
+
+    expect(earliest).toBe(firstAvailable);
+    expect(refreshCount).toBeGreaterThan(0);
+  });
+
+  test("sem refreshTemplate, trata throws como false", async () => {
+    const latestSq = 10000;
+
+    const service = new SegmentDiscoveryService(
+      async (url) => {
+        const sq = Number(url.match(/sq\/(\d+)/)?.[1]);
+        if (latestSq - sq > 2048) throw new Error("HTTP 403");
+        return sq >= latestSq - 5000;
+      },
+      (template, sq) => template.replace(/sq\/\d+/, `sq/${sq}`),
+    );
+
+    const earliest = await service.findEarliestAvailableSq(
+      "https://example.com/sq/1/chunk.ts",
+      latestSq,
+    );
+
+    expect(earliest).toBeGreaterThan(latestSq - 5000);
+    expect(earliest).toBeLessThanOrEqual(latestSq);
   });
 });

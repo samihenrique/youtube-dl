@@ -24,7 +24,7 @@ export function createContainer(): AppDependencies {
   const hlsParser = new HlsParserService();
 
   const SEGMENT_CHECK_RETRIES = 3;
-  const SEGMENT_CHECK_TIMEOUT_MS = 10_000;
+  const SEGMENT_CHECK_TIMEOUT_MS = 15_000;
 
   const segmentExistsChecker = async (url: string): Promise<boolean> => {
     for (let attempt = 0; attempt < SEGMENT_CHECK_RETRIES; attempt++) {
@@ -36,23 +36,23 @@ export function createContainer(): AppDependencies {
         );
 
         const response = await fetch(url, {
-          headers: { Range: "bytes=0-64" },
+          method: "HEAD",
           signal: controller.signal,
         });
         clearTimeout(timer);
 
-        if (!response.ok) return false;
+        if (response.status === 404 || response.status === 410) {
+          return false;
+        }
 
-        const ct = response.headers.get("content-type")?.toLowerCase() ?? "";
-        if (ct.includes("text/plain") || ct.includes("text/html")) return false;
+        if (response.ok) {
+          return true;
+        }
 
-        const data = new Uint8Array(await response.arrayBuffer());
-        return data.byteLength > 0;
+        throw new Error(`HTTP ${response.status}`);
       } catch (error: unknown) {
         const isLastAttempt = attempt === SEGMENT_CHECK_RETRIES - 1;
         if (isLastAttempt) {
-          const msg = error instanceof Error ? error.message : String(error);
-          console.error(`[warn] Falha ao verificar segmento após ${SEGMENT_CHECK_RETRIES} tentativas: ${msg}`);
           throw error;
         }
         await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
