@@ -31,3 +31,39 @@ export function formatDuration(totalSeconds: number): string {
 export function formatSpeed(bytesPerSecond: number): string {
   return `${formatBytes(bytesPerSecond)}/s`;
 }
+
+export function formatEta(totalMs: number): string {
+  if (!Number.isFinite(totalMs) || totalMs <= 0) return "poucos segundos";
+
+  const totalSeconds = Math.ceil(totalMs / 1000);
+
+  if (totalSeconds < 5) return "poucos segundos";
+  if (totalSeconds < 60) return `~${totalSeconds} segundos`;
+
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+  if (hours === 0) {
+    return minutes === 1 ? "~1 minuto" : `~${minutes} minutos`;
+  }
+
+  const hourPart = hours === 1 ? "1 hora" : `${hours} horas`;
+  if (minutes === 0) return `~${hourPart}`;
+  const minPart = minutes === 1 ? "1 minuto" : `${minutes} minutos`;
+  return `~${hourPart} e ${minPart}`;
+}
+
+export function formatSegmentDuration(segmentCount: number, segmentLengthSec = 5): string {
+  const totalSeconds = segmentCount * segmentLengthSec;
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+  if (hours === 0) {
+    return minutes === 1 ? "~1 minuto" : `~${minutes} minutos`;
+  }
+
+  const hourPart = hours === 1 ? "1 hora" : `${hours} horas`;
+  if (minutes === 0) return `~${hourPart}`;
+  const minPart = minutes === 1 ? "1 minuto" : `${minutes} minutos`;
+  return `~${hourPart} e ${minPart}`;
+}

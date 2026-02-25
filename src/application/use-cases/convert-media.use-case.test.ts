@@ -19,6 +19,9 @@ function createMockReporter(): ProgressReporter {
     update: mock(() => {}),
     finish: mock(() => {}),
     error: mock(() => {}),
+    phase: mock(() => {}),
+    info: mock(() => {}),
+    warn: mock(() => {}),
   };
 }
 

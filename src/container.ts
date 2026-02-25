@@ -74,6 +74,7 @@ export function createContainer(): AppDependencies {
   const segmentDiscovery = new SegmentDiscoveryService(
     segmentExistsChecker,
     (template, sq) => hlsParser.buildSegmentUrl(template, sq),
+    (msg) => reporter.info(msg),
   );
 
   return {

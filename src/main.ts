@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 import pc from "picocolors";
-import { DomainError } from "./domain/errors/domain-error.ts";
 import { createContainer } from "./container.ts";
 import { CliApp } from "./presentation/cli/app.ts";
 import { parseArgs } from "./presentation/cli/args.ts";
+import { handleError } from "./presentation/cli/error-handler.ts";
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv);
@@ -11,7 +11,7 @@ async function main(): Promise<void> {
   const app = new CliApp(container);
 
   const cleanup = (): void => {
-    console.log(pc.dim("\n\nEncerrando..."));
+    console.log(pc.dim("\n\n  Tudo bem, saindo. Até a próxima!"));
     process.exit(130);
   };
 
@@ -22,12 +22,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  if (error instanceof DomainError) {
-    console.error(pc.red(`\n✖ [${error.code}] ${error.message}`));
-  } else if (error instanceof Error) {
-    console.error(pc.red(`\n✖ ${error.message}`));
-  } else {
-    console.error(pc.red(`\n✖ Erro fatal: ${String(error)}`));
-  }
+  handleError(error);
   process.exit(1);
 });

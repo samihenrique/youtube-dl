@@ -4,22 +4,29 @@ import type { ConversionTask } from "../../domain/entities/conversion-task.ts";
 import type { DownloadTask } from "../../domain/entities/download-task.ts";
 import type { VideoInfo } from "../../domain/entities/video-info.ts";
 import { VideoType } from "../../domain/enums/video-type.ts";
-import { DomainError } from "../../domain/errors/domain-error.ts";
 import { Bitrate } from "../../domain/value-objects/bitrate.ts";
 import { TimeRange } from "../../domain/value-objects/time-range.ts";
 import type { ConvertMediaUseCase } from "../../application/use-cases/convert-media.use-case.ts";
 import type { DownloadLiveUseCase } from "../../application/use-cases/download-live.use-case.ts";
 import type { DownloadVideoUseCase } from "../../application/use-cases/download-video.use-case.ts";
 import type { ResolveVideoInfoUseCase } from "../../application/use-cases/resolve-video-info.use-case.ts";
-import { formatDuration } from "../../infrastructure/helpers/format.ts";
 import type { ParsedArgs } from "./args.ts";
 import { promptUrl } from "./prompts/url.prompt.ts";
-import { promptDownloadOptions } from "./prompts/download-options.prompt.ts";
-import { promptOutputOptions } from "./prompts/output-options.prompt.ts";
 import {
-  promptShouldConvert,
-  promptConversionOptions,
-} from "./prompts/conversion-options.prompt.ts";
+  promptAction,
+  promptQuality,
+  promptLiveMode,
+  promptCustomize,
+  type ActionChoice,
+} from "./prompts/action.prompt.ts";
+import { promptConversion } from "./prompts/conversion-options.prompt.ts";
+import { getSmartDefaults, isFfmpegAvailable } from "./defaults.ts";
+import { handleError } from "./error-handler.ts";
+import {
+  renderVideoCard,
+  renderVideoDetails,
+  renderDownloadSummary,
+} from "../renderers/summary.renderer.ts";
 
 export interface AppDependencies {
   resolveVideoInfo: ResolveVideoInfoUseCase;
@@ -32,8 +39,6 @@ export class CliApp {
   constructor(private readonly deps: AppDependencies) {}
 
   async run(args: ParsedArgs): Promise<void> {
-    this.printBanner();
-
     try {
       if (args.interactive) {
         await this.runInteractive();
@@ -41,118 +46,197 @@ export class CliApp {
         await this.runNonInteractive(args);
       }
     } catch (error: unknown) {
-      this.handleError(error);
+      handleError(error);
       process.exit(1);
     }
   }
 
-  private printBanner(): void {
+  private async runInteractive(): Promise<void> {
     console.log();
     console.log(
       pc.bold(pc.cyan("  youtube-dl")) +
-        pc.dim(" — YouTube downloader ultra-rápido"),
+        pc.dim("  ·  cola o link, baixa o vídeo"),
     );
-    console.log();
-  }
 
-  private async runInteractive(): Promise<void> {
-    p.intro(pc.bgCyan(pc.black(" youtube-dl ")));
+    p.intro(pc.dim("─".repeat(Math.min(50, (process.stdout.columns ?? 60) - 4))));
 
     let continueLoop = true;
     while (continueLoop) {
       await this.runInteractiveSession();
 
       const again = await p.confirm({
-        message: "Baixar outro vídeo?",
+        message: "Quer baixar outro vídeo?",
         initialValue: false,
       });
 
       if (p.isCancel(again) || !again) {
         continueLoop = false;
-      } else {
-        console.log();
       }
     }
 
-    p.outro(pc.green("Até a próxima!"));
+    p.outro(pc.dim("Até a próxima!"));
   }
 
   private async runInteractiveSession(): Promise<void> {
     const url = await promptUrl();
 
     const spinner = p.spinner();
-    spinner.start("Resolvendo informações do vídeo...");
+    spinner.start("Buscando informações do vídeo...");
 
     let videoInfo: VideoInfo;
     try {
       videoInfo = await this.deps.resolveVideoInfo.execute(url);
-      spinner.stop(this.formatVideoSummary(videoInfo));
+      spinner.stop("Vídeo encontrado!");
     } catch (error: unknown) {
-      spinner.stop("Falha ao resolver vídeo");
+      spinner.stop("Não foi possível encontrar o vídeo");
       throw error;
     }
 
-    const infoOnly = await this.promptInfoOnly();
-    if (infoOnly) {
-      this.printVideoDetails(videoInfo);
+    renderVideoCard(videoInfo);
+
+    const action = await promptAction(videoInfo);
+
+    if (action === "info") {
+      renderVideoDetails(videoInfo);
       return;
     }
 
-    const downloadOpts = await promptDownloadOptions(
-      videoInfo.type,
-      videoInfo.qualities,
+    const { task, conversion } = await this.buildTaskFromAction(
+      action,
+      videoInfo,
     );
-    const outputOpts = await promptOutputOptions();
-    const shouldConvert = await promptShouldConvert();
-    let conversion: ConversionTask | null = null;
-    if (shouldConvert) {
-      conversion = await promptConversionOptions();
+
+    renderDownloadSummary({
+      videoInfo,
+      quality: task.qualityLabel === "best" ? "Melhor disponível" : task.qualityLabel,
+      outputDir: task.outputDir,
+      liveMode: task.liveMode,
+      conversion,
+    });
+
+    const confirmed = await p.confirm({
+      message: "Tudo certo, pode começar?",
+      initialValue: true,
+    });
+
+    if (p.isCancel(confirmed) || !confirmed) {
+      p.log.info(pc.dim("Download cancelado."));
+      return;
     }
 
-    const task: DownloadTask = {
-      videoInfo,
-      outputDir: outputOpts.outputDir,
-      filenamePattern: outputOpts.filenamePattern,
-      overwrite: outputOpts.overwrite,
-      concurrency: downloadOpts.concurrency,
-      maxDurationSeconds: downloadOpts.maxDuration,
-      rateLimitBytesPerSecond: downloadOpts.rateLimit
-        ? new Bitrate(downloadOpts.rateLimit).bitsPerSecond / 8
-        : null,
-      retries: downloadOpts.retries,
-      timeoutSeconds: downloadOpts.timeout,
-      liveMode: downloadOpts.liveMode,
-      qualityLabel: downloadOpts.quality,
-      conversion,
-    };
+    const totalSteps = conversion ? 2 : 1;
+    p.log.step(pc.cyan(`[1/${totalSteps}]`) + " Baixando...");
 
     const outputPath = await this.executeDownload(task);
 
     if (conversion && outputPath) {
+      p.log.step(pc.cyan(`[2/${totalSteps}]`) + " Convertendo...");
+
       const ext = conversion.extractAudio ?? conversion.outputFormat;
-      const convertedPath = outputPath.replace(/\.[^.]+$/, `.converted.${ext}`);
-      await this.deps.convertMedia.execute(outputPath, convertedPath, conversion);
+      const convertedPath = outputPath.replace(
+        /\.[^.]+$/,
+        `.converted.${ext}`,
+      );
+      await this.deps.convertMedia.execute(
+        outputPath,
+        convertedPath,
+        conversion,
+      );
     }
 
-    p.log.success(pc.green("Download concluído!"));
+    console.log();
+    p.log.success(pc.green(pc.bold("Pronto!")) + pc.dim(` Salvo em ${task.outputDir}`));
+  }
+
+  private async buildTaskFromAction(
+    action: ActionChoice,
+    videoInfo: VideoInfo,
+  ): Promise<{ task: DownloadTask; conversion: ConversionTask | null }> {
+    const defaults = getSmartDefaults(videoInfo);
+    const isLive =
+      videoInfo.type === VideoType.Live ||
+      videoInfo.type === VideoType.PostLiveDvr;
+
+    let quality = defaults.quality;
+    let liveMode = defaults.liveMode;
+    let outputDir = defaults.outputDir;
+    let concurrency = defaults.concurrency;
+    let rateLimit: string | null = null;
+    let maxDuration: number | null = null;
+    let retries = defaults.retries;
+    let timeout = defaults.timeout;
+
+    if (action === "quality") {
+      quality = await promptQuality(videoInfo.qualities);
+      if (isLive) {
+        liveMode = await promptLiveMode();
+      }
+    } else if (action === "customize") {
+      const custom = await promptCustomize(videoInfo);
+      quality = custom.quality;
+      liveMode = custom.liveMode;
+      outputDir = custom.outputDir;
+      concurrency = custom.concurrency;
+      rateLimit = custom.rateLimit;
+      maxDuration = custom.maxDuration;
+      retries = custom.retries;
+      timeout = custom.timeout;
+    }
+
+    let conversion: ConversionTask | null = null;
+    const ffmpegOk = isFfmpegAvailable();
+
+    if (ffmpegOk) {
+      conversion = await promptConversion();
+    } else {
+      p.log.info(
+        pc.dim(
+          "Conversão não disponível — instala o ffmpeg pra ter essa opção.",
+        ),
+      );
+    }
+
+    const task: DownloadTask = {
+      videoInfo,
+      outputDir,
+      filenamePattern: defaults.filenamePattern,
+      overwrite: defaults.overwrite,
+      concurrency,
+      maxDurationSeconds: maxDuration,
+      rateLimitBytesPerSecond: rateLimit
+        ? new Bitrate(rateLimit).bitsPerSecond / 8
+        : null,
+      retries,
+      timeoutSeconds: timeout,
+      liveMode,
+      qualityLabel: quality,
+      conversion,
+    };
+
+    return { task, conversion };
   }
 
   private async runNonInteractive(args: ParsedArgs): Promise<void> {
     if (!args.url) {
+      console.log();
       console.error(
-        pc.red("Erro: --url é obrigatório no modo não-interativo."),
+        pc.red("  Precisa informar a URL com --url <link>"),
       );
       console.log(
-        pc.dim("Execute sem argumentos para o modo interativo, ou use --url <url>"),
+        pc.dim("  Ou execute sem argumentos para o modo interativo."),
       );
+      console.log();
       process.exit(1);
     }
 
+    console.log();
+    console.log(pc.dim("  Buscando informações do vídeo..."));
+
     const videoInfo = await this.deps.resolveVideoInfo.execute(args.url);
-    console.log(this.formatVideoSummary(videoInfo));
+    renderVideoCard(videoInfo);
 
     if (args.infoOnly) {
-      this.printVideoDetails(videoInfo);
+      renderVideoDetails(videoInfo);
       return;
     }
 
@@ -194,9 +278,20 @@ export class CliApp {
 
     if (conversion && outputPath) {
       const ext = conversion.extractAudio ?? conversion.outputFormat;
-      const convertedPath = outputPath.replace(/\.[^.]+$/, `.converted.${ext}`);
-      await this.deps.convertMedia.execute(outputPath, convertedPath, conversion);
+      const convertedPath = outputPath.replace(
+        /\.[^.]+$/,
+        `.converted.${ext}`,
+      );
+      await this.deps.convertMedia.execute(
+        outputPath,
+        convertedPath,
+        conversion,
+      );
     }
+
+    console.log();
+    console.log(pc.green(pc.bold("  Pronto!")));
+    console.log();
   }
 
   private async executeDownload(task: DownloadTask): Promise<string> {
@@ -207,68 +302,5 @@ export class CliApp {
       return this.deps.downloadLive.execute(task);
     }
     return this.deps.downloadVideo.execute(task);
-  }
-
-  private async promptInfoOnly(): Promise<boolean> {
-    const result = await p.confirm({
-      message: "Apenas visualizar informações (sem baixar)?",
-      initialValue: false,
-    });
-
-    if (p.isCancel(result)) {
-      p.cancel("Operação cancelada.");
-      process.exit(0);
-    }
-    return result;
-  }
-
-  private formatVideoSummary(info: VideoInfo): string {
-    const typeLabel =
-      info.type === VideoType.Live
-        ? pc.red("● LIVE")
-        : info.type === VideoType.PostLiveDvr
-          ? pc.yellow("◉ DVR")
-          : pc.green("▶ Vídeo");
-
-    const duration = info.durationSeconds
-      ? pc.dim(` (${formatDuration(info.durationSeconds)})`)
-      : "";
-
-    return `${typeLabel} ${pc.bold(info.title)}${duration}`;
-  }
-
-  private printVideoDetails(info: VideoInfo): void {
-    console.log();
-    console.log(pc.bold("  Detalhes do vídeo:"));
-    console.log(`  ${pc.dim("ID:")}        ${info.id}`);
-    console.log(`  ${pc.dim("Título:")}    ${info.title}`);
-    console.log(`  ${pc.dim("Tipo:")}      ${info.type}`);
-    if (info.durationSeconds) {
-      console.log(
-        `  ${pc.dim("Duração:")}   ${formatDuration(info.durationSeconds)}`,
-      );
-    }
-    if (info.qualities.length > 0) {
-      console.log(`  ${pc.dim("Qualidades:")} ${info.qualities.map((q) => q.label).join(", ")}`);
-    }
-    console.log();
-  }
-
-  private handleError(error: unknown): void {
-    console.log();
-    if (error instanceof DomainError) {
-      console.error(pc.red(`✖ [${error.code}] ${error.message}`));
-      if (error.cause) {
-        const causeMsg =
-          error.cause instanceof Error
-            ? error.cause.message
-            : String(error.cause);
-        console.error(pc.dim(`  Causa: ${causeMsg}`));
-      }
-    } else if (error instanceof Error) {
-      console.error(pc.red(`✖ ${error.message}`));
-    } else {
-      console.error(pc.red(`✖ Erro inesperado: ${String(error)}`));
-    }
   }
 }

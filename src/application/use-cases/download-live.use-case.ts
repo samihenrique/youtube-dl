@@ -7,6 +7,7 @@ import type { MediaRemuxer } from "../../domain/ports/media-remuxer.port.ts";
 import type { ProgressReporter } from "../../domain/ports/progress-reporter.port.ts";
 import type { SegmentDownloader } from "../../domain/ports/segment-downloader.port.ts";
 import type { VideoInfoProvider } from "../../domain/ports/video-info-provider.port.ts";
+import { formatSegmentDuration } from "../../infrastructure/helpers/format.ts";
 import type { HlsParserService } from "../services/hls-parser.service.ts";
 import type { SegmentDiscoveryService } from "../services/segment-discovery.service.ts";
 import { buildOutputPath, resolveExistingFile } from "./shared/output-path.ts";
@@ -148,11 +149,8 @@ export class DownloadLiveUseCase {
       task.videoInfo.dashFormats,
     );
 
-    console.log(
-      `[dash] Vídeo: itag ${videoFormat.itag} ${videoFormat.qualityLabel ?? ""} (${Math.round(videoFormat.bitrate / 1000)}kbps)`,
-    );
-    console.log(
-      `[dash] Áudio: itag ${audioFormat.itag} (${Math.round(audioFormat.bitrate / 1000)}kbps)`,
+    this.reporter.info(
+      `Formato: ${videoFormat.qualityLabel ?? "melhor"} (${Math.round(videoFormat.bitrate / 1000)}kbps vídeo + ${Math.round(audioFormat.bitrate / 1000)}kbps áudio)`,
     );
 
     const latestSq = await this.findLatestSqFromHls(task);
@@ -174,11 +172,17 @@ export class DownloadLiveUseCase {
     const { SegmentDiscoveryService: SDS } = await import(
       "../services/segment-discovery.service.ts"
     );
-    const dashDiscovery = new SDS(dashChecker, buildDashUrl);
+    const dashDiscovery = new SDS(
+      dashChecker,
+      buildDashUrl,
+      (msg) => this.reporter.info(msg),
+    );
 
     const refreshVideoTemplate = async (): Promise<string> => {
       return this.getFreshDashUrl(task.videoInfo.id, videoFormat.itag, "video");
     };
+
+    this.reporter.info("Procurando início da gravação...");
 
     const earliestSq = await dashDiscovery.findEarliestAvailableSq(
       videoFormat.url,
@@ -195,19 +199,15 @@ export class DownloadLiveUseCase {
 
     const totalSegments = endSq - startSq + 1;
     const totalDvrSegments = latestSq - earliestSq + 1;
-    const hours = Math.floor((totalSegments * 5) / 3600);
-    const minutes = Math.floor(((totalSegments * 5) % 3600) / 60);
-    const dvrHours = Math.floor((totalDvrSegments * 5) / 3600);
-    const dvrMinutes = Math.floor(((totalDvrSegments * 5) % 3600) / 60);
 
-    console.log(
-      `[dvr] Janela disponível: sq ${earliestSq}..${latestSq} (${totalDvrSegments} segmentos, ~${dvrHours}h${String(dvrMinutes).padStart(2, "0")}m)`,
+    this.reporter.info(
+      `Janela DVR: ${totalDvrSegments} segmentos (${formatSegmentDuration(totalDvrSegments)})`,
     );
-    console.log(
-      `[dvr] Baixando: sq ${startSq}..${endSq} (${totalSegments} segmentos, ~${hours}h${String(minutes).padStart(2, "0")}m)`,
+    this.reporter.info(
+      `Baixando ${totalSegments} segmentos (${formatSegmentDuration(totalSegments)})`,
     );
 
-    console.log("[dash] Obtendo URLs frescas para download...");
+    this.reporter.info("Preparando URLs de download...");
     const freshVideoUrl = await this.getFreshDashUrl(
       task.videoInfo.id,
       videoFormat.itag,
@@ -316,6 +316,8 @@ export class DownloadLiveUseCase {
       return freshSegments[0]!;
     };
 
+    this.reporter.info("Procurando início da gravação...");
+
     const earliestSq = await this.segmentDiscovery.findEarliestAvailableSq(
       firstUrl,
       latestSq,
@@ -330,13 +332,13 @@ export class DownloadLiveUseCase {
     }
 
     const totalSegments = endSq - startSq + 1;
-    const hours = Math.floor((totalSegments * 5) / 3600);
-    const minutes = Math.floor(((totalSegments * 5) % 3600) / 60);
-    console.log(
-      `[dvr] Janela disponível: sq ${earliestSq}..${latestSq} (${latestSq - earliestSq + 1} segmentos)`,
+    const totalDvrSegments = latestSq - earliestSq + 1;
+
+    this.reporter.info(
+      `Janela DVR: ${totalDvrSegments} segmentos (${formatSegmentDuration(totalDvrSegments)})`,
     );
-    console.log(
-      `[dvr] Baixando: sq ${startSq}..${endSq} (${totalSegments} segmentos, ~${hours}h${String(minutes).padStart(2, "0")}m)`,
+    this.reporter.info(
+      `Baixando ${totalSegments} segmentos (${formatSegmentDuration(totalSegments)})`,
     );
 
     await this.segmentDownloader.download(

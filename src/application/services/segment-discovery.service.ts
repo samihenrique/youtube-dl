@@ -1,9 +1,12 @@
 const DEFAULT_MAX_LOOKBACK_SEGMENTS = 8_640; // 12h × 720 seg/h
 
+export type DiscoveryLogger = (message: string) => void;
+
 export class SegmentDiscoveryService {
   constructor(
     private readonly checkExists: (url: string) => Promise<boolean>,
     private readonly buildUrl: (template: string, sq: number) => string,
+    private readonly log: DiscoveryLogger = () => {},
   ) {}
 
   async findEarliestAvailableSq(
@@ -28,9 +31,7 @@ export class SegmentDiscoveryService {
       }
 
       const estimatedHours = ((step * 5) / 3600).toFixed(1);
-      console.log(
-        `[dvr-discovery] Verificando sq ${candidate} (~${estimatedHours}h atrás)...`,
-      );
+      this.log(`Verificando ~${estimatedHours}h atrás...`);
 
       const exists = await this.probeWithRefresh(
         currentTemplate,
@@ -53,9 +54,7 @@ export class SegmentDiscoveryService {
     let left = Math.max(absoluteMin, lowerBound);
     let right = latestSq;
 
-    console.log(
-      `[dvr-discovery] Refinando entre sq ${left}..${right} (busca binária)...`,
-    );
+    this.log("Refinando ponto inicial...");
 
     while (left < right) {
       const mid = Math.floor((left + right) / 2);
@@ -78,8 +77,8 @@ export class SegmentDiscoveryService {
     const totalSegments = latestSq - left + 1;
     const hours = Math.floor((totalSegments * 5) / 3600);
     const minutes = Math.floor(((totalSegments * 5) % 3600) / 60);
-    console.log(
-      `[dvr-discovery] Primeiro segmento encontrado: sq ${left} (${totalSegments} segmentos, ~${hours}h${String(minutes).padStart(2, "0")}m)`,
+    this.log(
+      `Encontrado: ${totalSegments} segmentos (~${hours}h${String(minutes).padStart(2, "0")}m disponíveis)`,
     );
 
     return left;
@@ -98,9 +97,7 @@ export class SegmentDiscoveryService {
         return false;
       }
 
-      console.log(
-        `[dvr-discovery] Autenticação expirada, renovando manifesto...`,
-      );
+      this.log("Renovando autenticação...");
 
       const freshTemplate = await refreshTemplate();
       onRefresh(freshTemplate);

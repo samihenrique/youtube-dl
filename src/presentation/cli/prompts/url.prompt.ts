@@ -5,17 +5,17 @@ export async function promptUrl(): Promise<string> {
   const envUrl = process.env["YOUTUBE_LIVE_URL"]?.trim() ?? "";
 
   const url = await p.text({
-    message: "Cole a URL do YouTube:",
-    placeholder: "https://youtube.com/watch?v=...",
+    message: "Qual vídeo você quer baixar?",
+    placeholder: "Cola o link do YouTube aqui",
     defaultValue: envUrl || undefined,
     initialValue: envUrl || undefined,
     validate: validateUrl,
   });
 
   if (p.isCancel(url)) {
-    p.cancel("Operação cancelada.");
+    p.cancel("Tudo bem, até a próxima!");
     process.exit(0);
   }
 
-  return url;
+  return url.trim();
 }
