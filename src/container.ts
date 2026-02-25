@@ -36,7 +36,7 @@ export function createContainer(): AppDependencies {
         );
 
         const response = await fetch(url, {
-          method: "HEAD",
+          headers: { Range: "bytes=0-64" },
           signal: controller.signal,
         });
         clearTimeout(timer);
@@ -45,11 +45,21 @@ export function createContainer(): AppDependencies {
           return false;
         }
 
-        if (response.ok) {
-          return true;
+        if (response.status === 401 || response.status === 403) {
+          throw new Error(`HTTP ${response.status}`);
         }
 
-        throw new Error(`HTTP ${response.status}`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const ct = response.headers.get("content-type")?.toLowerCase() ?? "";
+        if (ct.includes("text/plain") || ct.includes("text/html")) {
+          return false;
+        }
+
+        const data = new Uint8Array(await response.arrayBuffer());
+        return data.byteLength > 0;
       } catch (error: unknown) {
         const isLastAttempt = attempt === SEGMENT_CHECK_RETRIES - 1;
         if (isLastAttempt) {
@@ -75,6 +85,7 @@ export function createContainer(): AppDependencies {
       hlsParser,
       segmentDiscovery,
       reporter,
+      youtubeInfo,
     ),
     convertMedia: new ConvertMediaUseCase(converter, reporter),
   };

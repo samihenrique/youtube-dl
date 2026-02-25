@@ -60,12 +60,14 @@ describe("SegmentDiscoveryService", () => {
 
   test("encontra segmento correto para live de 24h (~17280 segmentos)", async () => {
     const latestSq = 20000;
-    const firstAvailable = latestSq - 17280 + 1; // ~24h de DVR (5s/seg)
+    const firstAvailable = latestSq - 17280 + 1;
     const service = createService(firstAvailable);
 
     const earliest = await service.findEarliestAvailableSq(
       "https://example.com/sq/1/chunk.ts",
       latestSq,
+      undefined,
+      17280,
     );
     expect(earliest).toBe(firstAvailable);
   });
@@ -78,18 +80,46 @@ describe("SegmentDiscoveryService", () => {
     const earliest = await service.findEarliestAvailableSq(
       "https://example.com/sq/1/chunk.ts",
       latestSq,
+      undefined,
+      34560,
     );
     expect(earliest).toBe(firstAvailable);
   });
 
-  test("não tem limite de lookback — encontra segmento para 100h+", async () => {
+  test("respeita maxLookbackSegments e não procura além do limite", async () => {
+    let probeCount = 0;
     const latestSq = 100000;
-    const firstAvailable = latestSq - 72000 + 1; // ~100h
+    const service = new SegmentDiscoveryService(
+      async (url) => {
+        probeCount++;
+        const sq = Number(url.match(/sq\/(\d+)/)?.[1]);
+        return sq >= 1;
+      },
+      (template, sq) => template.replace(/sq\/\d+/, `sq/${sq}`),
+    );
+
+    const maxLookback = 8640; // 12h
+    const earliest = await service.findEarliestAvailableSq(
+      "https://example.com/sq/1/chunk.ts",
+      latestSq,
+      undefined,
+      maxLookback,
+    );
+
+    expect(earliest).toBe(latestSq - maxLookback);
+    expect(probeCount).toBeLessThan(30);
+  });
+
+  test("encontra segmento real dentro do limite de lookback", async () => {
+    const latestSq = 100000;
+    const firstAvailable = latestSq - 5000 + 1;
     const service = createService(firstAvailable);
 
     const earliest = await service.findEarliestAvailableSq(
       "https://example.com/sq/1/chunk.ts",
       latestSq,
+      undefined,
+      8640,
     );
     expect(earliest).toBe(firstAvailable);
   });

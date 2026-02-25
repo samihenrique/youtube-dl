@@ -1,3 +1,5 @@
+const DEFAULT_MAX_LOOKBACK_SEGMENTS = 8_640; // 12h × 720 seg/h
+
 export class SegmentDiscoveryService {
   constructor(
     private readonly checkExists: (url: string) => Promise<boolean>,
@@ -8,16 +10,20 @@ export class SegmentDiscoveryService {
     segmentTemplateUrl: string,
     latestSq: number,
     refreshTemplate?: () => Promise<string>,
+    maxLookbackSegments: number = DEFAULT_MAX_LOOKBACK_SEGMENTS,
   ): Promise<number> {
     let currentTemplate = segmentTemplateUrl;
     let lowerBound = latestSq;
     let step = 1;
+    let templateIsFresh = false;
+
+    const absoluteMin = Math.max(1, latestSq - maxLookbackSegments);
 
     while (true) {
       const candidate = latestSq - step;
 
-      if (candidate <= 0) {
-        lowerBound = 1;
+      if (candidate <= absoluteMin) {
+        lowerBound = absoluteMin;
         break;
       }
 
@@ -29,9 +35,10 @@ export class SegmentDiscoveryService {
       const exists = await this.probeWithRefresh(
         currentTemplate,
         candidate,
-        refreshTemplate,
+        templateIsFresh ? undefined : refreshTemplate,
         (freshTemplate) => {
           currentTemplate = freshTemplate;
+          templateIsFresh = true;
         },
       );
 
@@ -43,7 +50,7 @@ export class SegmentDiscoveryService {
       step *= 2;
     }
 
-    let left = Math.max(1, lowerBound);
+    let left = Math.max(absoluteMin, lowerBound);
     let right = latestSq;
 
     console.log(
@@ -55,9 +62,10 @@ export class SegmentDiscoveryService {
       const exists = await this.probeWithRefresh(
         currentTemplate,
         mid,
-        refreshTemplate,
+        templateIsFresh ? undefined : refreshTemplate,
         (freshTemplate) => {
           currentTemplate = freshTemplate;
+          templateIsFresh = true;
         },
       );
       if (exists) {

@@ -1,4 +1,4 @@
-import type { VideoInfo } from "../../domain/entities/video-info.ts";
+import type { DashFormat, VideoInfo } from "../../domain/entities/video-info.ts";
 import { VideoType } from "../../domain/enums/video-type.ts";
 import type { VideoInfoProvider } from "../../domain/ports/video-info-provider.port.ts";
 import { QualityOption } from "../../domain/value-objects/quality-option.ts";
@@ -29,6 +29,7 @@ export class YoutubeInfoAdapter implements VideoInfoProvider {
     const durationSeconds = info.basic_info?.duration ?? null;
 
     const qualities = this.extractQualities(info.streaming_data);
+    const dashFormats = this.extractDashFormats(info.streaming_data);
 
     return {
       id: videoId,
@@ -37,6 +38,7 @@ export class YoutubeInfoAdapter implements VideoInfoProvider {
       durationSeconds,
       hlsManifestUrl,
       qualities,
+      dashFormats,
     };
   }
 
@@ -47,6 +49,25 @@ export class YoutubeInfoAdapter implements VideoInfoProvider {
     if (b["is_post_live_dvr"]) return VideoType.PostLiveDvr;
     if (b["is_live_content"]) return VideoType.Live;
     return VideoType.Video;
+  }
+
+  private extractDashFormats(streaming: unknown): DashFormat[] {
+    if (!streaming || typeof streaming !== "object") return [];
+    const s = streaming as Record<string, unknown>;
+    const adaptiveFormats =
+      (s["adaptive_formats"] as Array<Record<string, unknown>>) ?? [];
+
+    return adaptiveFormats
+      .filter((fmt) => Boolean(fmt["url"]))
+      .map((fmt) => ({
+        itag: (fmt["itag"] as number) ?? 0,
+        url: fmt["url"] as string,
+        mimeType: (fmt["mime_type"] as string) ?? (fmt["mimeType"] as string) ?? "",
+        qualityLabel: (fmt["quality_label"] as string) ?? (fmt["qualityLabel"] as string) ?? null,
+        bitrate: (fmt["bitrate"] as number) ?? 0,
+        width: (fmt["width"] as number) ?? null,
+        height: (fmt["height"] as number) ?? null,
+      }));
   }
 
   private extractQualities(streaming: unknown): QualityOption[] {

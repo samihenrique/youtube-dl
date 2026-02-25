@@ -1,10 +1,12 @@
 import type { DownloadTask } from "../../domain/entities/download-task.ts";
+import type { DashFormat } from "../../domain/entities/video-info.ts";
 import { DownloadMode } from "../../domain/enums/download-mode.ts";
 import { VideoType } from "../../domain/enums/video-type.ts";
 import { DownloadFailedError } from "../../domain/errors/download-failed.error.ts";
 import type { MediaRemuxer } from "../../domain/ports/media-remuxer.port.ts";
 import type { ProgressReporter } from "../../domain/ports/progress-reporter.port.ts";
 import type { SegmentDownloader } from "../../domain/ports/segment-downloader.port.ts";
+import type { VideoInfoProvider } from "../../domain/ports/video-info-provider.port.ts";
 import type { HlsParserService } from "../services/hls-parser.service.ts";
 import type { SegmentDiscoveryService } from "../services/segment-discovery.service.ts";
 import { buildOutputPath, resolveExistingFile } from "./shared/output-path.ts";
@@ -16,6 +18,7 @@ export class DownloadLiveUseCase {
     private readonly hlsParser: HlsParserService,
     private readonly segmentDiscovery: SegmentDiscoveryService,
     private readonly reporter: ProgressReporter,
+    private readonly videoInfoProvider: VideoInfoProvider,
   ) {}
 
   async execute(task: DownloadTask): Promise<string> {
@@ -79,6 +82,195 @@ export class DownloadLiveUseCase {
     task: DownloadTask,
     outputPath: string,
   ): Promise<void> {
+    const dashFormats = task.videoInfo.dashFormats;
+    const hasDash = dashFormats.length > 0;
+
+    if (hasDash) {
+      await this.downloadDvrDash(task, outputPath);
+    } else {
+      await this.downloadDvrHls(task, outputPath);
+    }
+  }
+
+  private selectDashFormats(dashFormats: readonly DashFormat[]): {
+    video: DashFormat;
+    audio: DashFormat;
+  } {
+    const videoFormats = dashFormats.filter((f) =>
+      f.mimeType.startsWith("video/"),
+    );
+    const audioFormats = dashFormats.filter((f) =>
+      f.mimeType.startsWith("audio/"),
+    );
+
+    if (videoFormats.length === 0 || audioFormats.length === 0) {
+      throw new DownloadFailedError(
+        "DASH: não há formatos de vídeo e/ou áudio disponíveis.",
+      );
+    }
+
+    const video = videoFormats.sort((a, b) => b.bitrate - a.bitrate)[0]!;
+    const audio =
+      audioFormats
+        .filter(
+          (f) =>
+            f.mimeType.includes("mp4a") || f.mimeType.includes("audio/mp4"),
+        )
+        .sort((a, b) => b.bitrate - a.bitrate)[0] ??
+      audioFormats.sort((a, b) => b.bitrate - a.bitrate)[0]!;
+
+    return { video, audio };
+  }
+
+  private async getFreshDashUrl(
+    videoId: string,
+    itag: number,
+    type: "video" | "audio",
+  ): Promise<string> {
+    const freshInfo = await this.videoInfoProvider.resolve(videoId);
+    const formats = freshInfo.dashFormats.filter((f) =>
+      f.mimeType.startsWith(`${type}/`),
+    );
+    const match = formats.find((f) => f.itag === itag);
+    if (!match) {
+      throw new DownloadFailedError(
+        `DASH: não foi possível obter URL fresca para itag ${itag}`,
+      );
+    }
+    return match.url;
+  }
+
+  private async downloadDvrDash(
+    task: DownloadTask,
+    outputPath: string,
+  ): Promise<void> {
+    const { video: videoFormat, audio: audioFormat } = this.selectDashFormats(
+      task.videoInfo.dashFormats,
+    );
+
+    console.log(
+      `[dash] Vídeo: itag ${videoFormat.itag} ${videoFormat.qualityLabel ?? ""} (${Math.round(videoFormat.bitrate / 1000)}kbps)`,
+    );
+    console.log(
+      `[dash] Áudio: itag ${audioFormat.itag} (${Math.round(audioFormat.bitrate / 1000)}kbps)`,
+    );
+
+    const latestSq = await this.findLatestSqFromHls(task);
+
+    const buildDashUrl = (template: string, sq: number) => {
+      const url = new URL(template);
+      url.searchParams.set("sq", String(sq));
+      return url.toString();
+    };
+
+    const dashChecker = async (url: string): Promise<boolean> => {
+      const response = await fetch(url, { headers: { Range: "bytes=0-64" } });
+      if (response.status === 404 || response.status === 410) return false;
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = new Uint8Array(await response.arrayBuffer());
+      return data.byteLength > 0;
+    };
+
+    const { SegmentDiscoveryService: SDS } = await import(
+      "../services/segment-discovery.service.ts"
+    );
+    const dashDiscovery = new SDS(dashChecker, buildDashUrl);
+
+    const refreshVideoTemplate = async (): Promise<string> => {
+      return this.getFreshDashUrl(task.videoInfo.id, videoFormat.itag, "video");
+    };
+
+    const earliestSq = await dashDiscovery.findEarliestAvailableSq(
+      videoFormat.url,
+      latestSq,
+      refreshVideoTemplate,
+    );
+
+    let startSq = earliestSq;
+    let endSq = latestSq;
+    if (task.maxDurationSeconds !== null) {
+      const maxSegments = Math.max(1, Math.ceil(task.maxDurationSeconds / 5));
+      startSq = Math.max(earliestSq, latestSq - maxSegments + 1);
+    }
+
+    const totalSegments = endSq - startSq + 1;
+    const totalDvrSegments = latestSq - earliestSq + 1;
+    const hours = Math.floor((totalSegments * 5) / 3600);
+    const minutes = Math.floor(((totalSegments * 5) % 3600) / 60);
+    const dvrHours = Math.floor((totalDvrSegments * 5) / 3600);
+    const dvrMinutes = Math.floor(((totalDvrSegments * 5) % 3600) / 60);
+
+    console.log(
+      `[dvr] Janela disponível: sq ${earliestSq}..${latestSq} (${totalDvrSegments} segmentos, ~${dvrHours}h${String(dvrMinutes).padStart(2, "0")}m)`,
+    );
+    console.log(
+      `[dvr] Baixando: sq ${startSq}..${endSq} (${totalSegments} segmentos, ~${hours}h${String(minutes).padStart(2, "0")}m)`,
+    );
+
+    console.log("[dash] Obtendo URLs frescas para download...");
+    const freshVideoUrl = await this.getFreshDashUrl(
+      task.videoInfo.id,
+      videoFormat.itag,
+      "video",
+    );
+    const freshAudioUrl = await this.getFreshDashUrl(
+      task.videoInfo.id,
+      audioFormat.itag,
+      "audio",
+    );
+
+    const refreshVideoUrl = () =>
+      this.getFreshDashUrl(task.videoInfo.id, videoFormat.itag, "video");
+    const refreshAudioUrl = () =>
+      this.getFreshDashUrl(task.videoInfo.id, audioFormat.itag, "audio");
+
+    await this.segmentDownloader.download(
+      {
+        segmentTemplateUrl: freshVideoUrl,
+        audioTemplateUrl: freshAudioUrl,
+        startSq,
+        endSq,
+        outputPath,
+        concurrency: task.concurrency,
+        retries: task.retries,
+        timeoutSeconds: task.timeoutSeconds,
+        urlMode: "dash",
+        refreshVideoUrl,
+        refreshAudioUrl,
+      },
+      (progress) => this.reporter.update(progress),
+    );
+  }
+
+  private async findLatestSqFromHls(task: DownloadTask): Promise<number> {
+    const manifestText = await this.fetchText(task.videoInfo.hlsManifestUrl!);
+    const variants = this.hlsParser.parseVariants(manifestText);
+
+    if (variants.length === 0) {
+      throw new DownloadFailedError(
+        "Não foi possível extrair variantes HLS do manifesto.",
+      );
+    }
+
+    const chosen = variants[0]!;
+    const variantManifestText = await this.fetchText(chosen.url);
+    const segmentUrls = this.hlsParser.parseSegmentUrls(variantManifestText);
+
+    if (segmentUrls.length === 0) {
+      throw new DownloadFailedError(
+        "Não foi possível extrair segmentos do manifesto HLS.",
+      );
+    }
+
+    return this.hlsParser.extractSqFromUrl(
+      segmentUrls[segmentUrls.length - 1]!,
+    );
+  }
+
+  private async downloadDvrHls(
+    task: DownloadTask,
+    outputPath: string,
+  ): Promise<void> {
     const manifestText = await this.fetchText(task.videoInfo.hlsManifestUrl!);
     const variants = this.hlsParser.parseVariants(manifestText);
 
@@ -99,8 +291,9 @@ export class DownloadLiveUseCase {
     }
 
     const firstUrl = segmentUrls[0]!;
-    const lastUrl = segmentUrls[segmentUrls.length - 1]!;
-    const latestSq = this.hlsParser.extractSqFromUrl(lastUrl);
+    const latestSq = this.hlsParser.extractSqFromUrl(
+      segmentUrls[segmentUrls.length - 1]!,
+    );
 
     const refreshTemplate = async (): Promise<string> => {
       const freshManifest = await this.fetchText(
@@ -129,32 +322,33 @@ export class DownloadLiveUseCase {
       refreshTemplate,
     );
 
+    let startSq = earliestSq;
     let endSq = latestSq;
     if (task.maxDurationSeconds !== null) {
-      const maxSegments = Math.max(
-        1,
-        Math.ceil(task.maxDurationSeconds / 5),
-      );
-      endSq = Math.min(latestSq, earliestSq + maxSegments - 1);
+      const maxSegments = Math.max(1, Math.ceil(task.maxDurationSeconds / 5));
+      startSq = Math.max(earliestSq, latestSq - maxSegments + 1);
     }
 
-    const totalSegments = endSq - earliestSq + 1;
-    const estimatedDurationSeconds = totalSegments * 5;
-    const hours = Math.floor(estimatedDurationSeconds / 3600);
-    const minutes = Math.floor((estimatedDurationSeconds % 3600) / 60);
+    const totalSegments = endSq - startSq + 1;
+    const hours = Math.floor((totalSegments * 5) / 3600);
+    const minutes = Math.floor(((totalSegments * 5) % 3600) / 60);
     console.log(
-      `[dvr] Janela disponível: sq ${earliestSq}..${endSq} (${totalSegments} segmentos, ~${hours}h${String(minutes).padStart(2, "0")}m)`,
+      `[dvr] Janela disponível: sq ${earliestSq}..${latestSq} (${latestSq - earliestSq + 1} segmentos)`,
+    );
+    console.log(
+      `[dvr] Baixando: sq ${startSq}..${endSq} (${totalSegments} segmentos, ~${hours}h${String(minutes).padStart(2, "0")}m)`,
     );
 
     await this.segmentDownloader.download(
       {
         segmentTemplateUrl: firstUrl,
-        startSq: earliestSq,
+        startSq,
         endSq,
         outputPath,
         concurrency: task.concurrency,
         retries: task.retries,
         timeoutSeconds: task.timeoutSeconds,
+        urlMode: "hls",
       },
       (progress) => this.reporter.update(progress),
     );

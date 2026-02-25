@@ -21,6 +21,7 @@ const sampleVideoInfo: VideoInfo = {
   durationSeconds: 300,
   hlsManifestUrl: null,
   qualities: [],
+  dashFormats: [],
 };
 
 const sampleLiveInfo: VideoInfo = {

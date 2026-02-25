@@ -35,6 +35,7 @@ function createTask(
       durationSeconds: 300,
       hlsManifestUrl: null,
       qualities: [],
+      dashFormats: [],
     },
     outputDir: "/tmp/test-downloads",
     filenamePattern: FilenamePattern.TitleId,
@@ -78,6 +79,7 @@ describe("DownloadVideoUseCase", () => {
         durationSeconds: null,
         hlsManifestUrl: "https://example.com/m.m3u8",
         qualities: [],
+        dashFormats: [],
       },
     });
 
