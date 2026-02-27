@@ -10,7 +10,7 @@ import {
   validatePositiveInteger,
 } from "../validators/input.validators.ts";
 
-export type ActionChoice = "download" | "quality" | "customize" | "info";
+export type ActionChoice = "download" | "quality" | "customize" | "info" | "convert-files";
 
 function onCancel(): never {
   p.cancel("Tudo bem, até a próxima!");
@@ -20,6 +20,26 @@ function onCancel(): never {
 function cancelGuard<T>(value: T | symbol): T {
   if (p.isCancel(value)) onCancel();
   return value as T;
+}
+
+export async function promptMainMenu(): Promise<ActionChoice> {
+  return cancelGuard(
+    await p.select<ActionChoice>({
+      message: "O que deseja fazer?",
+      options: [
+        {
+          value: "download",
+          label: "Baixar vídeo do YouTube",
+          hint: "cola o link e baixa",
+        },
+        {
+          value: "convert-files",
+          label: "Converter vídeos já baixados",
+          hint: "processa arquivos existentes",
+        },
+      ],
+    }),
+  );
 }
 
 export async function promptAction(videoInfo: VideoInfo): Promise<ActionChoice> {

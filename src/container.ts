@@ -1,3 +1,4 @@
+import { ConvertFilesUseCase } from "./application/use-cases/convert-files.use-case.ts";
 import { ConvertMediaUseCase } from "./application/use-cases/convert-media.use-case.ts";
 import { DownloadLiveUseCase } from "./application/use-cases/download-live.use-case.ts";
 import { DownloadVideoUseCase } from "./application/use-cases/download-video.use-case.ts";
@@ -5,8 +6,10 @@ import { ResolveVideoInfoUseCase } from "./application/use-cases/resolve-video-i
 import { HlsParserService } from "./application/services/hls-parser.service.ts";
 import { SegmentDiscoveryService } from "./application/services/segment-discovery.service.ts";
 import { FfmpegConverterAdapter } from "./infrastructure/adapters/ffmpeg-converter.adapter.ts";
+import { FfmpegHardwareDetector } from "./infrastructure/adapters/ffmpeg-hardware-detector.adapter.ts";
 import { FfmpegRemuxerAdapter } from "./infrastructure/adapters/ffmpeg-remuxer.adapter.ts";
 import { HttpSegmentDownloaderAdapter } from "./infrastructure/adapters/http-segment-downloader.adapter.ts";
+import { SystemHardwareMonitor } from "./infrastructure/adapters/system-hardware-monitor.adapter.ts";
 import { YoutubeInfoAdapter } from "./infrastructure/adapters/youtube-info.adapter.ts";
 import { YoutubeVideoDownloaderAdapter } from "./infrastructure/adapters/youtube-video-downloader.adapter.ts";
 import type { AppDependencies } from "./presentation/cli/app.ts";
@@ -20,6 +23,8 @@ export function createContainer(): AppDependencies {
   const segmentDownloader = new HttpSegmentDownloaderAdapter();
   const remuxer = new FfmpegRemuxerAdapter();
   const converter = new FfmpegConverterAdapter();
+  const hardwareDetector = new FfmpegHardwareDetector();
+  const hardwareMonitor = new SystemHardwareMonitor();
 
   const hlsParser = new HlsParserService();
 
@@ -88,6 +93,8 @@ export function createContainer(): AppDependencies {
       reporter,
       youtubeInfo,
     ),
-    convertMedia: new ConvertMediaUseCase(converter, reporter),
+    convertMedia: new ConvertMediaUseCase(converter, hardwareMonitor),
+    convertFiles: new ConvertFilesUseCase(converter, reporter, hardwareMonitor),
+    hardwareDetector,
   };
 }

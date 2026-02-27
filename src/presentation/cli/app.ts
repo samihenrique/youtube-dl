@@ -3,9 +3,12 @@ import pc from "picocolors";
 import type { ConversionTask } from "../../domain/entities/conversion-task.ts";
 import type { DownloadTask } from "../../domain/entities/download-task.ts";
 import type { VideoInfo } from "../../domain/entities/video-info.ts";
+import { HardwareAccel } from "../../domain/enums/hardware-accel.ts";
 import { VideoType } from "../../domain/enums/video-type.ts";
+import type { HardwareDetector } from "../../domain/ports/hardware-detector.port.ts";
 import { Bitrate } from "../../domain/value-objects/bitrate.ts";
 import { TimeRange } from "../../domain/value-objects/time-range.ts";
+import type { ConvertFilesUseCase } from "../../application/use-cases/convert-files.use-case.ts";
 import type { ConvertMediaUseCase } from "../../application/use-cases/convert-media.use-case.ts";
 import type { DownloadLiveUseCase } from "../../application/use-cases/download-live.use-case.ts";
 import type { DownloadVideoUseCase } from "../../application/use-cases/download-video.use-case.ts";
@@ -14,12 +17,17 @@ import type { ParsedArgs } from "./args.ts";
 import { promptUrl } from "./prompts/url.prompt.ts";
 import {
   promptAction,
+  promptMainMenu,
   promptQuality,
   promptLiveMode,
   promptCustomize,
   type ActionChoice,
 } from "./prompts/action.prompt.ts";
-import { promptConversion } from "./prompts/conversion-options.prompt.ts";
+import {
+  promptConversion,
+  buildConversionTask,
+} from "./prompts/conversion-options.prompt.ts";
+import { promptConvertFiles } from "./prompts/convert-files.prompt.ts";
 import { getSmartDefaults, isFfmpegAvailable } from "./defaults.ts";
 import { handleError } from "./error-handler.ts";
 import {
@@ -33,6 +41,8 @@ export interface AppDependencies {
   downloadVideo: DownloadVideoUseCase;
   downloadLive: DownloadLiveUseCase;
   convertMedia: ConvertMediaUseCase;
+  convertFiles: ConvertFilesUseCase;
+  hardwareDetector: HardwareDetector;
 }
 
 export class CliApp {
@@ -62,10 +72,16 @@ export class CliApp {
 
     let continueLoop = true;
     while (continueLoop) {
-      await this.runInteractiveSession();
+      const mainAction = await promptMainMenu();
+
+      if (mainAction === "convert-files") {
+        await this.runConvertFilesSession();
+      } else {
+        await this.runInteractiveSession();
+      }
 
       const again = await p.confirm({
-        message: "Quer baixar outro vídeo?",
+        message: "Quer fazer outra operação?",
         initialValue: false,
       });
 
@@ -75,6 +91,59 @@ export class CliApp {
     }
 
     p.outro(pc.dim("Até a próxima!"));
+  }
+
+  private async runConvertFilesSession(): Promise<void> {
+    const ffmpegOk = isFfmpegAvailable();
+    if (!ffmpegOk) {
+      p.log.error(
+        pc.red("ffmpeg não encontrado. Instale o ffmpeg para usar a conversão."),
+      );
+      return;
+    }
+
+    const selection = await promptConvertFiles();
+    if (!selection) return;
+
+    const conversionOptions = await promptConversion(this.deps.hardwareDetector);
+    if (!conversionOptions) {
+      p.log.info(pc.dim("Conversão cancelada."));
+      return;
+    }
+
+    console.log();
+    p.log.info(
+      pc.dim(
+        `Convertendo ${selection.files.length} arquivo(s) com ${conversionOptions.hardwareAccel === HardwareAccel.None ? "CPU" : "GPU (" + conversionOptions.hardwareAccel + ")"} (${conversionOptions.threads ?? "auto"} threads, preset ${conversionOptions.preset})`,
+      ),
+    );
+
+    const confirmed = await p.confirm({
+      message: "Iniciar conversão?",
+      initialValue: true,
+    });
+
+    if (p.isCancel(confirmed) || !confirmed) {
+      p.log.info(pc.dim("Conversão cancelada."));
+      return;
+    }
+
+    const result = await this.deps.convertFiles.execute(
+      selection.inputDir,
+      conversionOptions.task,
+      selection.files,
+    );
+
+    console.log();
+    if (result.success.length > 0) {
+      p.log.success(pc.green(`${result.success.length} arquivo(s) convertido(s) com sucesso`));
+    }
+    if (result.failed.length > 0) {
+      p.log.error(pc.red(`${result.failed.length} arquivo(s) falharam:`));
+      for (const f of result.failed) {
+        console.log(pc.dim(`  - ${f.file}: ${f.error.slice(0, 100)}`));
+      }
+    }
   }
 
   private async runInteractiveSession(): Promise<void> {
@@ -98,6 +167,11 @@ export class CliApp {
 
     if (action === "info") {
       renderVideoDetails(videoInfo);
+      return;
+    }
+
+    if (action === "convert-files") {
+      await this.runConvertFilesSession();
       return;
     }
 
@@ -188,7 +262,10 @@ export class CliApp {
     const ffmpegOk = isFfmpegAvailable();
 
     if (ffmpegOk) {
-      conversion = await promptConversion();
+      const conversionOptions = await promptConversion(this.deps.hardwareDetector);
+      if (conversionOptions) {
+        conversion = conversionOptions.task;
+      }
     } else {
       p.log.info(
         pc.dim(
@@ -243,7 +320,7 @@ export class CliApp {
 
     let conversion: ConversionTask | null = null;
     if (args.convert) {
-      conversion = {
+      conversion = buildConversionTask({
         outputFormat: args.format,
         extractAudio: args.extractAudio,
         videoCodec: args.videoCodec,
@@ -255,7 +332,10 @@ export class CliApp {
         timeRange: new TimeRange(args.trimStart, args.trimEnd),
         noAudio: args.noAudio,
         noVideo: args.noVideo,
-      };
+        hardwareAccel: args.hardwareAccel,
+        threads: args.threads,
+        preset: args.preset,
+      });
     }
 
     const task: DownloadTask = {

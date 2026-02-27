@@ -1,5 +1,7 @@
 import { DownloadMode } from "../../domain/enums/download-mode.ts";
+import { EncodingPreset } from "../../domain/enums/encoding-preset.ts";
 import { FilenamePattern } from "../../domain/enums/filename-pattern.ts";
+import { HardwareAccel } from "../../domain/enums/hardware-accel.ts";
 import { OverwriteBehavior } from "../../domain/enums/overwrite-behavior.ts";
 import { OutputFormat } from "../../domain/enums/output-format.ts";
 import { AudioFormat } from "../../domain/enums/audio-format.ts";
@@ -34,6 +36,9 @@ export interface ParsedArgs {
   noVideo: boolean;
   infoOnly: boolean;
   interactive: boolean;
+  hardwareAccel: HardwareAccel;
+  threads: number | null;
+  preset: EncodingPreset;
 }
 
 function findFlag(args: string[], flag: string): string | null {
@@ -218,5 +223,40 @@ export function parseArgs(argv: string[]): ParsedArgs {
     noVideo: hasFlag(args, "--no-video"),
     infoOnly: hasFlag(args, "--info-only"),
     interactive,
+    hardwareAccel: parseEnum(
+      args,
+      "--hardware-accel",
+      [
+        HardwareAccel.None,
+        HardwareAccel.Auto,
+        HardwareAccel.Nvenc,
+        HardwareAccel.Qsv,
+        HardwareAccel.Vaapi,
+        HardwareAccel.Videotoolbox,
+      ],
+      HardwareAccel.Auto,
+      "Aceleração de hardware",
+    ),
+    threads: (() => {
+      const raw = findFlag(args, "--threads");
+      if (!raw) return null;
+      const num = Number(raw);
+      if (!Number.isInteger(num) || num < 1 || num > 128) {
+        throw new InvalidInputError("Threads", "deve ser inteiro entre 1 e 128");
+      }
+      return num;
+    })(),
+    preset: parseEnum(
+      args,
+      "--preset",
+      [
+        EncodingPreset.Ultrafast,
+        EncodingPreset.Fast,
+        EncodingPreset.Medium,
+        EncodingPreset.Slow,
+      ],
+      EncodingPreset.Fast,
+      "Preset",
+    ),
   };
 }

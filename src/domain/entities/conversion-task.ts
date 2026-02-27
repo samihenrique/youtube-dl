@@ -1,5 +1,7 @@
 import type { AudioCodec } from "../enums/audio-codec.ts";
 import type { AudioFormat } from "../enums/audio-format.ts";
+import type { EncodingPreset } from "../enums/encoding-preset.ts";
+import type { HardwareAccel } from "../enums/hardware-accel.ts";
 import type { OutputFormat } from "../enums/output-format.ts";
 import type { VideoCodec } from "../enums/video-codec.ts";
 import type { Bitrate } from "../value-objects/bitrate.ts";
@@ -17,4 +19,8 @@ export interface ConversionTask {
   readonly timeRange: TimeRange;
   readonly noAudio: boolean;
   readonly noVideo: boolean;
+  readonly hardwareAccel: HardwareAccel;
+  readonly threads: number | null;
+  readonly preset: EncodingPreset;
+  readonly crf: number | null;
 }

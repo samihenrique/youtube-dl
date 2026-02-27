@@ -1,7 +1,9 @@
 export { AudioCodec } from "./audio-codec.ts";
 export { AudioFormat } from "./audio-format.ts";
 export { DownloadMode } from "./download-mode.ts";
+export { EncodingPreset } from "./encoding-preset.ts";
 export { FilenamePattern } from "./filename-pattern.ts";
+export { HardwareAccel } from "./hardware-accel.ts";
 export { OutputFormat } from "./output-format.ts";
 export { OverwriteBehavior } from "./overwrite-behavior.ts";
 export { VideoCodec } from "./video-codec.ts";
