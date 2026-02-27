@@ -15,7 +15,7 @@ import {
   validateTimeCode,
 } from "../validators/input.validators.ts";
 
-type ConversionPreset = "mp3" | "mp4-optimized" | "shrink-720p" | "custom" | "none";
+type ConversionPreset = "mp3" | "mp4-optimized" | "shrink-720p" | "fast-480p" | "custom" | "none";
 
 function onCancel(): never {
   p.cancel("Tudo bem, até a próxima!");
@@ -62,6 +62,11 @@ export async function promptConversion(
           hint: "boa qualidade, arquivo menor",
         },
         {
+          value: "fast-480p",
+          label: pc.yellow("Rápido 480p (sem áudio)"),
+          hint: "máxima performance, arquivo pequeno",
+        },
+        {
           value: "custom",
           label: "Personalizar conversão",
           hint: "codec, bitrate, resolução, corte...",
@@ -82,6 +87,9 @@ export async function promptConversion(
       break;
     case "shrink-720p":
       task = createShrinkPreset();
+      break;
+    case "fast-480p":
+      task = createFast480pPreset();
       break;
     case "custom":
       task = await promptCustomConversion();
@@ -290,6 +298,26 @@ function createShrinkPreset(): ConversionTask {
     threads: null,
     preset: EncodingPreset.Fast,
     crf: 28,
+  };
+}
+
+function createFast480pPreset(): ConversionTask {
+  return {
+    outputFormat: OutputFormat.Mp4,
+    extractAudio: null,
+    videoCodec: VideoCodec.H264,
+    audioCodec: AudioCodec.Copy,
+    videoBitrate: null,
+    audioBitrate: null,
+    resolution: "854x480",
+    fps: 30,
+    timeRange: new TimeRange(null, null),
+    noAudio: true, // Remove áudio para máxima velocidade
+    noVideo: false,
+    hardwareAccel: HardwareAccel.Auto, // Usa GPU automaticamente se disponível
+    threads: null,
+    preset: EncodingPreset.Ultrafast, // Preset mais rápido
+    crf: 30, // CRF mais alto = mais compressão, menor arquivo
   };
 }
 

@@ -9,6 +9,7 @@ import { ConversionFailedError } from "../../domain/errors/conversion-failed.err
 import type { InputMediaInfo, MediaConverter } from "../../domain/ports/media-converter.port.ts";
 import type { ConversionProgress } from "../../domain/value-objects/conversion-progress.ts";
 import { createConversionProgress } from "../../domain/value-objects/conversion-progress.ts";
+import { ProcessManager } from "../helpers/process-manager.ts";
 import { resolveFfmpegBinary } from "../helpers/ffmpeg-resolver.ts";
 
 const SOFTWARE_VIDEO_CODEC_MAP: Record<string, string> = {
@@ -187,17 +188,33 @@ export class FfmpegConverterAdapter implements MediaConverter {
       stderr: "pipe",
     });
 
-    if (onProgress) {
-      await this.streamProgress(proc.stdout, inputSize, totalTimeUs, onProgress);
-    }
+    // Register process for cleanup on SIGINT/SIGTERM
+    const unregister = ProcessManager.register(proc);
 
-    const stderr = await new Response(proc.stderr).text();
-    const exitCode = await proc.exited;
+    try {
+      if (onProgress) {
+        await this.streamProgress(proc.stdout, inputSize, totalTimeUs, onProgress);
+      }
 
-    if (exitCode !== 0) {
-      throw new ConversionFailedError(
-        `ffmpeg saiu com código ${exitCode}.\n${stderr.slice(-500)}`,
-      );
+      const stderr = await new Response(proc.stderr).text();
+      const exitCode = await proc.exited;
+
+      unregister(); // Unregister after process completes
+
+      if (exitCode !== 0) {
+        throw new ConversionFailedError(
+          `ffmpeg saiu com código ${exitCode}.\n${stderr.slice(-500)}`,
+        );
+      }
+    } catch (error) {
+      // Ensure process is killed if something goes wrong
+      try {
+        proc.kill(9); // SIGKILL
+      } catch {
+        // Ignore if already dead
+      }
+      unregister();
+      throw error;
     }
   }
 
@@ -359,6 +376,10 @@ export class FfmpegConverterAdapter implements MediaConverter {
             this.applyCrfArg(args, vCodec, task.crf, task.hardwareAccel);
           } else if (task.videoBitrate) {
             args.push("-b:v", task.videoBitrate.toFfmpegArg());
+          } else {
+            // Fallback: aplicar CRF padrão para evitar bitrate ilimitado
+            const defaultCrf = useHwAccel ? 28 : 23;
+            this.applyCrfArg(args, vCodec, defaultCrf, task.hardwareAccel);
           }
 
           const presetStr = PRESET_MAP[task.preset] ?? (useHwAccel ? "fast" : "medium");
@@ -408,9 +429,9 @@ export class FfmpegConverterAdapter implements MediaConverter {
   ): void {
     if (NVENC_CODECS.has(vCodec)) {
       // NVENC uses -cq for quality (0-51, same scale as CRF)
+      // Use -rc vbr for variable bitrate mode with quality target
+      args.push("-rc", "vbr");
       args.push("-cq", String(crf));
-      // Also set -b:v 0 to allow purely quality-based encoding for NVENC
-      args.push("-b:v", "0");
     } else if (hardwareAccel === HardwareAccel.Qsv) {
       args.push("-global_quality", String(crf));
     } else if (CRF_SOFTWARE_CODECS.has(vCodec)) {

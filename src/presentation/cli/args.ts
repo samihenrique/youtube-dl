@@ -39,6 +39,7 @@ export interface ParsedArgs {
   hardwareAccel: HardwareAccel;
   threads: number | null;
   preset: EncodingPreset;
+  crf: number | null;
 }
 
 function findFlag(args: string[], flag: string): string | null {
@@ -258,5 +259,14 @@ export function parseArgs(argv: string[]): ParsedArgs {
       EncodingPreset.Fast,
       "Preset",
     ),
+    crf: (() => {
+      const raw = findFlag(args, "--crf");
+      if (!raw) return null;
+      const num = Number(raw);
+      if (!Number.isInteger(num) || num < 0 || num > 63) {
+        throw new InvalidInputError("CRF", "deve ser inteiro entre 0 e 63");
+      }
+      return num;
+    })(),
   };
 }

@@ -335,6 +335,7 @@ export class CliApp {
         hardwareAccel: args.hardwareAccel,
         threads: args.threads,
         preset: args.preset,
+        crf: args.crf,
       });
     }
 

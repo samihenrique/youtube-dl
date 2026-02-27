@@ -59,7 +59,13 @@ The interactive menu offers:
 Pass flags directly for scripting and automation:
 
 ```bash
+# Basic download
 bun run src/main.ts --url https://youtube.com/watch?v=dQw4w9WgXcQ
+
+# Download and convert to 480p without audio using GPU
+bun run src/main.ts --url https://youtube.com/watch?v=dQw4w9WgXcQ \
+  --convert --resolution 480p --no-audio \
+  --hardware-accel nvenc --preset ultrafast --crf 30
 ```
 
 You can also set `YOUTUBE_LIVE_URL` as an environment variable as a fallback when `--url` is not provided.
@@ -104,6 +110,7 @@ You can also set `YOUTUBE_LIVE_URL` as an environment variable as a fallback whe
 | `--trim-end <t>` | Trim end (HH:MM:SS) | — |
 | `--no-audio` | Remove audio track | off |
 | `--no-video` | Remove video track | off |
+| `--crf <n>` | Quality (0-51, lower=better, NVENC: 0-51, CPU: 0-63) | 23 |
 
 #### Encoding performance
 
@@ -135,6 +142,7 @@ When converting in interactive mode, quick presets are available:
 | MP3 | Extract audio as MP3 @ 192k |
 | MP4 otimizado | H.264 + AAC @ 192k, CRF 23, hardware auto |
 | Reduzir 720p | H.264 @ 1280×720 30fps, CRF 28, AAC @ 128k |
+| **⚡ Rápido 480p** | **H.264 @ 854×480 30fps, CRF 30, no audio, ultrafast preset, hardware auto** |
 | Personalizado | Full control over all parameters |
 
 ### Batch file conversion
@@ -143,10 +151,10 @@ Convert existing local files without downloading:
 
 ```bash
 # Interactive — select files from a directory
-bun run src/main.ts   # choose "Convert files" from main menu
+bun run src/main.ts   # choose "Converter vídeos já baixados" from main menu
 ```
 
-Supports `.mp4`, `.mkv`, `.webm`, `.avi`, `.mov`, `.flv`, `.wmv`, `.m4v`. Output files are saved alongside the originals as `{name}.converted.{ext}`.
+Supports `.mp4`, `.mkv`, `.webm`, `.avi`, `.mov`, `.flv`, `.wmv`, `.m4v`. Output files are saved alongside the originals as `{name}.converted.{ext}`. Features real-time progress with hardware monitoring (CPU/GPU usage) and automatic cleanup of ffmpeg processes on interruption.
 
 ## Architecture
 
