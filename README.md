@@ -5,9 +5,13 @@ Ultra-fast YouTube video and live stream downloader CLI with conversion support.
 ## Features
 
 - **Interactive CLI** with beautiful prompts powered by [@clack/prompts](https://github.com/bombshell-dev/clack)
-- **YouTube Live support** with DVR (download from the beginning) and live-now modes
-- **Parallel segment downloads** with configurable concurrency
+- **YouTube Live support** with DVR via DASH (download from the beginning) and live-now modes
+- **Parallel segment downloads** with configurable concurrency (up to 256)
 - **Post-download conversion** via ffmpeg (format, codec, bitrate, resolution, trim, extract audio)
+- **Batch file conversion** — convert existing local video files without downloading
+- **Hardware acceleration** — NVIDIA NVENC, Intel QSV, AMD/Intel VAAPI, Apple VideoToolbox
+- **Real-time hardware monitoring** — CPU and GPU usage during conversion
+- **Conversion presets** — quick MP3 extract, MP4 optimized, Shrink 720p, or fully custom
 - **Rigorous input validation** on every parameter
 - **Clean Architecture** with full separation of concerns
 - **Typed error hierarchy** with actionable messages — no suppressed errors
@@ -42,6 +46,14 @@ Run without arguments to get a guided experience with selectable options for eve
 bun run src/main.ts
 ```
 
+The interactive menu offers:
+
+- **Download** — best quality, fastest settings
+- **Choose quality** — pick specific resolution or audio-only
+- **Customize** — full control over download and output options
+- **View info** — show video details without downloading
+- **Convert files** — batch convert existing local video files
+
 ### Non-interactive mode
 
 Pass flags directly for scripting and automation:
@@ -49,6 +61,8 @@ Pass flags directly for scripting and automation:
 ```bash
 bun run src/main.ts --url https://youtube.com/watch?v=dQw4w9WgXcQ
 ```
+
+You can also set `YOUTUBE_LIVE_URL` as an environment variable as a fallback when `--url` is not provided.
 
 ### All flags
 
@@ -58,7 +72,7 @@ bun run src/main.ts --url https://youtube.com/watch?v=dQw4w9WgXcQ
 |------|-------------|---------|
 | `--url <url>` | YouTube URL (required in non-interactive) | — |
 | `--quality <q>` | Video quality (best, 1080p, 720p, etc.) | best |
-| `--live-mode <mode>` | Live download mode: `dvr-start` or `live-now` | dvr-start |
+| `--live-mode <mode>` | Live stream mode: `dvr-start` or `live-now` | dvr-start |
 | `--concurrency <n>` | Parallel segment downloads (1-256) | 4 |
 | `--max-duration <s>` | Max duration in seconds | unlimited |
 | `--rate-limit <r>` | Bandwidth limit (e.g., `10M`, `500K`) | unlimited |
@@ -91,11 +105,48 @@ bun run src/main.ts --url https://youtube.com/watch?v=dQw4w9WgXcQ
 | `--no-audio` | Remove audio track | off |
 | `--no-video` | Remove video track | off |
 
+#### Encoding performance
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--hardware-accel <a>` | `none`, `auto`, `nvenc`, `qsv`, `vaapi`, `videotoolbox` | auto |
+| `--threads <n>` | CPU threads for encoding (1-128) | auto |
+| `--preset <p>` | Encoding speed: `ultrafast`, `fast`, `medium`, `slow` | fast |
+
 #### Other
 
 | Flag | Description |
 |------|-------------|
 | `--info-only` | Show video info without downloading |
+
+### Live stream modes
+
+| Mode | Description |
+|------|-------------|
+| `dvr-start` | Download the full DVR window from the beginning (uses DASH) |
+| `live-now` | Record from the current live position onward |
+
+### Conversion presets (interactive)
+
+When converting in interactive mode, quick presets are available:
+
+| Preset | Description |
+|--------|-------------|
+| MP3 | Extract audio as MP3 @ 192k |
+| MP4 otimizado | H.264 + AAC @ 192k, CRF 23, hardware auto |
+| Reduzir 720p | H.264 @ 1280×720 30fps, CRF 28, AAC @ 128k |
+| Personalizado | Full control over all parameters |
+
+### Batch file conversion
+
+Convert existing local files without downloading:
+
+```bash
+# Interactive — select files from a directory
+bun run src/main.ts   # choose "Convert files" from main menu
+```
+
+Supports `.mp4`, `.mkv`, `.webm`, `.avi`, `.mov`, `.flv`, `.wmv`, `.m4v`. Output files are saved alongside the originals as `{name}.converted.{ext}`.
 
 ## Architecture
 
@@ -105,7 +156,7 @@ The project follows **Clean Architecture** principles:
 src/
 ├── domain/          # Entities, value objects, enums, errors, ports (interfaces)
 ├── application/     # Use cases and domain services
-├── infrastructure/  # Adapters (YouTube API, ffmpeg, HTTP)
+├── infrastructure/  # Adapters (YouTube API, ffmpeg, HTTP, hardware monitor)
 ├── presentation/    # CLI app, prompts, validators, renderers
 ├── container.ts     # Dependency composition
 └── main.ts          # Entry point
@@ -119,7 +170,7 @@ src/
 bun test
 ```
 
-149 tests covering domain validation, use case orchestration, infrastructure helpers, and input validators.
+152 tests covering domain validation, use case orchestration, infrastructure helpers, and input validators.
 
 ## License
 
