@@ -305,8 +305,16 @@ export class FfmpegConverterAdapter implements MediaConverter {
     args.push("-y");
 
     const useHwAccel = task.hardwareAccel !== HardwareAccel.None;
-    if (useHwAccel && task.videoCodec !== VideoCodec.Copy) {
-      args.push("-hwaccel", this.getHwAccelFlag(task.hardwareAccel));
+    const hwAccelFlag = useHwAccel ? this.getHwAccelFlag(task.hardwareAccel) : null;
+    
+    // Otimização: manter frames na GPU quando possível
+    if (hwAccelFlag && task.videoCodec !== VideoCodec.Copy) {
+      args.push("-hwaccel", hwAccelFlag);
+      
+      // Para NVIDIA, manter frames na VRAM para pipeline mais eficiente
+      if (task.hardwareAccel === HardwareAccel.Nvenc) {
+        args.push("-hwaccel_output_format", "cuda");
+      }
     }
 
     if (!task.timeRange.isEmpty) {
@@ -315,7 +323,7 @@ export class FfmpegConverterAdapter implements MediaConverter {
 
     args.push("-i", inputPath);
 
-    if (task.threads !== null && task.threads > 0) {
+    if (task.threads !== null && task.threads > 0 && !useHwAccel) {
       args.push("-threads", String(task.threads));
     }
 
@@ -333,8 +341,12 @@ export class FfmpegConverterAdapter implements MediaConverter {
         const vCodec = this.getVideoCodec(task);
         args.push("-c:v", vCodec);
 
+        // Otimização: usar filtros CUDA para NVIDIA quando aplicável
         if (task.resolution && task.videoCodec !== VideoCodec.Copy) {
-          args.push("-vf", `scale=${this.parseResolution(task.resolution)}`);
+          const scaleFilter = useHwAccel && task.hardwareAccel === HardwareAccel.Nvenc
+            ? this.getCudaScaleFilter(task.resolution)
+            : `scale=${this.parseResolution(task.resolution)}`;
+          args.push("-vf", scaleFilter);
         }
 
         if (task.fps !== null && task.videoCodec !== VideoCodec.Copy) {
@@ -357,6 +369,7 @@ export class FfmpegConverterAdapter implements MediaConverter {
       if (task.noAudio) {
         args.push("-an");
       } else {
+        // Otimização: copiar áudio se possível para economizar CPU
         const aCodec = AUDIO_CODEC_MAP[task.audioCodec] ?? "copy";
         args.push("-c:a", aCodec);
 
@@ -368,6 +381,23 @@ export class FfmpegConverterAdapter implements MediaConverter {
 
     args.push("-movflags", "+faststart", outputPath);
     return args;
+  }
+
+  private getCudaScaleFilter(resolution: string): string {
+    // Para NVIDIA, usar scale_cuda se disponível para processamento na GPU
+    const presetMatch = /^(\d+)p$/i.exec(resolution);
+    if (presetMatch) {
+      const height = presetMatch[1];
+      return `scale_cuda=-2:${height}`;
+    }
+
+    const wxhMatch = /^(\d+)x(\d+)$/i.exec(resolution);
+    if (wxhMatch) {
+      return `scale_cuda=${wxhMatch[1]}:${wxhMatch[2]}`;
+    }
+
+    // Fallback para scale normal se formato não reconhecido
+    return `scale=${this.parseResolution(resolution)}`;
   }
 
   private applyCrfArg(
