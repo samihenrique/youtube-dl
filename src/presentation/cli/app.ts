@@ -179,7 +179,10 @@ export class CliApp {
     const selection = await promptConvertFiles();
     if (!selection) return;
 
-    const conversionOptions = await promptConversion(this.deps.hardwareDetector);
+    const conversionOptions = await promptConversion(
+      this.deps.hardwareDetector,
+      "convert-files",
+    );
     if (!conversionOptions) {
       p.log.info(pc.dim("Conversão cancelada."));
       return;

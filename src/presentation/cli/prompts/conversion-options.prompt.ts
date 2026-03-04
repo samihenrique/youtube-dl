@@ -29,17 +29,24 @@ export interface ConversionOptions {
   preset: EncodingPreset;
 }
 
+export type ConversionContext = "after-download" | "convert-files";
+
 export async function promptConversion(
   hardwareDetector?: HardwareDetector,
+  context: ConversionContext = "after-download",
 ): Promise<ConversionOptions | null> {
+  const isConvertFiles = context === "convert-files";
+
   const preset = cancelGuard(
     await p.select<ConversionPreset>({
-      message: "Quer converter o arquivo depois de baixar?",
+      message: isConvertFiles
+        ? "Como deseja converter os arquivos?"
+        : "Quer converter o arquivo depois de baixar?",
       options: [
         {
           value: "none",
-          label: "Não, manter o original",
-          hint: "mais rápido",
+          label: isConvertFiles ? "Cancelar" : "Não, manter o original",
+          hint: isConvertFiles ? "sair sem converter" : "mais rápido",
         },
         {
           value: "mp4-optimized",
