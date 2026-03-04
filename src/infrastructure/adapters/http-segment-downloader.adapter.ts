@@ -63,7 +63,26 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
       { stdin: "pipe", stdout: "ignore", stderr: "inherit" },
     );
 
+    let ffmpegError: Error | null = null;
+    const stdin = ffmpeg.stdin as { on?(event: string, fn: (err: Error) => void): void };
+    if (typeof stdin.on === "function") {
+      stdin.on("error", (err: Error) => {
+        if (!ffmpegError) ffmpegError = err;
+      });
+    }
+
+    const safeWrite = (data: Uint8Array): void => {
+      if (ffmpegError) throw ffmpegError;
+      try {
+        ffmpeg.stdin.write(data);
+      } catch (err) {
+        ffmpegError = err instanceof Error ? err : new Error(String(err));
+        throw ffmpegError;
+      }
+    };
+
     function drainBuffer(): void {
+      if (ffmpegError) throw ffmpegError;
       while (
         pendingBuffer.has(nextSqToWrite) || missingSegments.has(nextSqToWrite)
       ) {
@@ -74,7 +93,7 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
         }
         const data = pendingBuffer.get(nextSqToWrite)!;
         pendingBuffer.delete(nextSqToWrite);
-        ffmpeg.stdin.write(data);
+        safeWrite(data);
         nextSqToWrite++;
       }
     }
@@ -100,42 +119,57 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
       );
     }
 
-    await this.runWithWorkerPool(
-      firstFetchSq,
-      options.endSq,
-      options.concurrency,
-      async (currentSq) => {
-        const data = await this.fetchHlsSegmentWithRefresh(
-          urlHolder,
-          currentSq,
-          options.retries,
-          options.timeoutSeconds,
-        );
+    try {
+      await this.runWithWorkerPool(
+        firstFetchSq,
+        options.endSq,
+        options.concurrency,
+        async (currentSq) => {
+          const data = await this.fetchHlsSegmentWithRefresh(
+            urlHolder,
+            currentSq,
+            options.retries,
+            options.timeoutSeconds,
+          );
 
-        if (data) {
-          downloadedBytes += data.byteLength;
-          downloadedSegments++;
-          pendingBuffer.set(currentSq, data);
-        } else {
-          missingSegments.add(currentSq);
-        }
-        processedSegments++;
-        drainBuffer();
+          if (data) {
+            downloadedBytes += data.byteLength;
+            downloadedSegments++;
+            pendingBuffer.set(currentSq, data);
+          } else {
+            missingSegments.add(currentSq);
+          }
+          processedSegments++;
+          drainBuffer();
 
-        onProgress(
-          new DownloadProgress(
-            downloadedBytes,
-            options.estimatedTotalBytes ?? null,
-            Date.now() - startedAt,
-            processedSegments,
-            totalSegments,
-          ),
-        );
-      },
-    );
+          onProgress(
+            new DownloadProgress(
+              downloadedBytes,
+              options.estimatedTotalBytes ?? null,
+              Date.now() - startedAt,
+              processedSegments,
+              totalSegments,
+            ),
+          );
+        },
+      );
 
-    drainBuffer();
-    await ffmpeg.stdin.end();
+      drainBuffer();
+      await ffmpeg.stdin.end();
+    } catch (err) {
+      try {
+        ffmpeg.kill(9);
+      } catch {
+        /* ignore */
+      }
+      const msg =
+        err instanceof Error && (err as NodeJS.ErrnoException).code === "EPIPE"
+          ? "ffmpeg encerrou inesperadamente (dados inválidos ou interrompido)"
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      throw new DownloadFailedError(`HLS: ${msg}`, { cause: err });
+    }
 
     if (downloadedSegments === 0) {
       throw new DownloadFailedError(
