@@ -4,6 +4,8 @@ import { DownloadMode } from "../../domain/enums/download-mode.ts";
 import { FilenamePattern } from "../../domain/enums/filename-pattern.ts";
 import { OverwriteBehavior } from "../../domain/enums/overwrite-behavior.ts";
 
+export const MAX_CONCURRENCY = 16;
+
 export interface SmartDefaults {
   quality: string;
   liveMode: DownloadMode;
@@ -26,7 +28,7 @@ export function getSmartDefaults(videoInfo: VideoInfo): SmartDefaults {
     outputDir: "./downloads",
     filenamePattern: FilenamePattern.TitleId,
     overwrite: OverwriteBehavior.Rename,
-    concurrency: 8,
+    concurrency: Math.min(8, MAX_CONCURRENCY),
     retries: isLive ? 5 : 3,
     timeout: isLive ? 45 : 30,
   };

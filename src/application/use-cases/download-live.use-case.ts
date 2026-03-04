@@ -7,6 +7,8 @@ import type { MediaRemuxer } from "../../domain/ports/media-remuxer.port.ts";
 import type { ProgressReporter } from "../../domain/ports/progress-reporter.port.ts";
 import type { SegmentDownloader } from "../../domain/ports/segment-downloader.port.ts";
 import type { VideoInfoProvider } from "../../domain/ports/video-info-provider.port.ts";
+import { DownloadProgress } from "../../domain/value-objects/download-progress.ts";
+import { concatMediaFiles } from "../../infrastructure/helpers/ffmpeg-concat.ts";
 import { formatSegmentDuration } from "../../infrastructure/helpers/format.ts";
 import type { HlsParserService } from "../services/hls-parser.service.ts";
 import type { SegmentDiscoveryService } from "../services/segment-discovery.service.ts";
@@ -22,6 +24,15 @@ interface HlsDvrWindow {
 }
 
 const EXTENDED_DVR_LOOKBACK_SEGMENTS = 8_640; // ~12h @ 5s/segmento
+const BATCH_THRESHOLD_SEGMENTS = 3_600; // ~5h: usa batch se total > este valor
+const BATCH_SEGMENTS = 180; // ~15min por lote (renova URL com mais frequência)
+
+function toPartPath(outputPath: string, partIndex: number): string {
+  const extMatch = outputPath.match(/\.[^.]+$/);
+  const ext = extMatch?.[0] ?? "";
+  const base = ext ? outputPath.slice(0, -ext.length) : outputPath;
+  return `${base}.part${partIndex}${ext}`;
+}
 
 export class DownloadLiveUseCase {
   constructor(
@@ -250,24 +261,117 @@ export class DownloadLiveUseCase {
     const refreshAudioUrl = () =>
       this.getFreshDashUrl(task.videoInfo.id, audioFormat.itag, "audio");
 
-    await this.segmentDownloader.download(
-      {
-        segmentTemplateUrl: freshVideoUrl,
-        audioTemplateUrl: freshAudioUrl,
+    if (totalSegments <= BATCH_THRESHOLD_SEGMENTS) {
+      await this.segmentDownloader.download(
+        {
+          segmentTemplateUrl: freshVideoUrl,
+          audioTemplateUrl: freshAudioUrl,
+          startSq,
+          endSq,
+          outputPath,
+          concurrency: task.concurrency,
+          retries: task.retries,
+          timeoutSeconds: task.timeoutSeconds,
+          urlMode: "dash",
+          estimatedTotalBytes,
+          refreshVideoUrl,
+          refreshAudioUrl,
+          knownMissingUntilSq,
+        },
+        (progress) => this.reporter.update(progress),
+      );
+    } else {
+      await this.downloadDashInBatches(
+        task,
+        outputPath,
         startSq,
         endSq,
-        outputPath,
-        concurrency: task.concurrency,
-        retries: task.retries,
-        timeoutSeconds: task.timeoutSeconds,
-        urlMode: "dash",
-        estimatedTotalBytes,
+        totalSegments,
+        estimatedTotalBytes ?? undefined,
         refreshVideoUrl,
         refreshAudioUrl,
         knownMissingUntilSq,
-      },
-      (progress) => this.reporter.update(progress),
+      );
+    }
+  }
+
+  private async downloadDashInBatches(
+    task: DownloadTask,
+    outputPath: string,
+    startSq: number,
+    endSq: number,
+    totalSegments: number,
+    estimatedTotalBytes: number | undefined,
+    refreshVideoUrl: () => Promise<string>,
+    refreshAudioUrl: () => Promise<string>,
+    knownMissingUntilSq: number | undefined,
+  ): Promise<void> {
+    const batches: { start: number; end: number }[] = [];
+    for (let s = startSq; s <= endSq; s += BATCH_SEGMENTS) {
+      const batchEnd = Math.min(s + BATCH_SEGMENTS - 1, endSq);
+      batches.push({ start: s, end: batchEnd });
+    }
+
+    this.reporter.info(
+      `Modo batch: ${batches.length} lotes de ~${formatSegmentDuration(BATCH_SEGMENTS)} (URL renovada a cada lote)`,
     );
+
+    const partPaths: string[] = [];
+    let segmentOffset = 0;
+    let bytesOffset = 0;
+    const startedAt = Date.now();
+
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i]!;
+      this.reporter.info(
+        `Lote ${i + 1}/${batches.length} (${formatSegmentDuration(batch.end - batch.start + 1)})...`,
+      );
+
+      const freshVideoUrl = await refreshVideoUrl();
+      const freshAudioUrl = await refreshAudioUrl();
+
+      const partPath = toPartPath(outputPath, i);
+
+      await this.segmentDownloader.download(
+        {
+          segmentTemplateUrl: freshVideoUrl,
+          audioTemplateUrl: freshAudioUrl,
+          startSq: batch.start,
+          endSq: batch.end,
+          outputPath: partPath,
+          concurrency: task.concurrency,
+          retries: task.retries,
+          timeoutSeconds: task.timeoutSeconds,
+          urlMode: "dash",
+          estimatedTotalBytes: undefined,
+          refreshVideoUrl,
+          refreshAudioUrl,
+          knownMissingUntilSq: i === 0 ? knownMissingUntilSq : undefined,
+        },
+        (progress) =>
+          this.reporter.update(
+            new DownloadProgress(
+              bytesOffset + progress.downloadedBytes,
+              estimatedTotalBytes ?? null,
+              Date.now() - startedAt,
+              segmentOffset + progress.downloadedSegments,
+              totalSegments,
+            ),
+          ),
+      );
+
+      segmentOffset += batch.end - batch.start + 1;
+      try {
+        const stat = await Bun.file(partPath).stat();
+        bytesOffset += stat.size;
+      } catch {
+        /* best-effort */
+      }
+      partPaths.push(partPath);
+    }
+
+    this.reporter.info("Mesclando lotes...");
+    await concatMediaFiles(partPaths, outputPath);
   }
 
   private selectHlsVariant(
@@ -343,10 +447,16 @@ export class DownloadLiveUseCase {
       this.reporter.info(`Formato HLS: ${chosen.resolution.height}p`);
     }
     this.reporter.info("Procurando início da gravação...");
+    const maxSegments =
+      task.maxDurationSeconds !== null
+        ? Math.ceil(task.maxDurationSeconds / 5)
+        : EXTENDED_DVR_LOOKBACK_SEGMENTS;
+    const maxLookback = Math.max(1, maxSegments);
     const earliestSq = await this.segmentDiscovery.findEarliestAvailableSq(
       firstUrl,
       latestSq,
       refreshTemplate,
+      maxLookback,
     );
 
     return {
@@ -398,22 +508,109 @@ export class DownloadLiveUseCase {
       `Baixando ${totalSegments} segmentos (${formatSegmentDuration(totalSegments)})`,
     );
 
-    await this.segmentDownloader.download(
-      {
-        segmentTemplateUrl: firstUrl,
+    if (totalSegments <= BATCH_THRESHOLD_SEGMENTS) {
+      await this.segmentDownloader.download(
+        {
+          segmentTemplateUrl: firstUrl,
+          startSq,
+          endSq,
+          outputPath,
+          concurrency: task.concurrency,
+          retries: task.retries,
+          timeoutSeconds: task.timeoutSeconds,
+          urlMode: "hls",
+          estimatedTotalBytes,
+          refreshVideoUrl: refreshTemplate,
+          knownMissingUntilSq,
+        },
+        (progress) => this.reporter.update(progress),
+      );
+    } else {
+      await this.downloadHlsInBatches(
+        task,
+        outputPath,
         startSq,
         endSq,
-        outputPath,
-        concurrency: task.concurrency,
-        retries: task.retries,
-        timeoutSeconds: task.timeoutSeconds,
-        urlMode: "hls",
-        estimatedTotalBytes,
-        refreshVideoUrl: refreshTemplate,
+        totalSegments,
+        estimatedTotalBytes ?? null,
+        refreshTemplate,
         knownMissingUntilSq,
-      },
-      (progress) => this.reporter.update(progress),
+      );
+    }
+  }
+
+  private async downloadHlsInBatches(
+    task: DownloadTask,
+    outputPath: string,
+    startSq: number,
+    endSq: number,
+    totalSegments: number,
+    estimatedTotalBytes: number | null,
+    refreshTemplate: () => Promise<string>,
+    knownMissingUntilSq: number | undefined,
+  ): Promise<void> {
+    const batches: { start: number; end: number }[] = [];
+    for (let s = startSq; s <= endSq; s += BATCH_SEGMENTS) {
+      const batchEnd = Math.min(s + BATCH_SEGMENTS - 1, endSq);
+      batches.push({ start: s, end: batchEnd });
+    }
+
+    this.reporter.info(
+      `Modo batch: ${batches.length} lotes de ~${formatSegmentDuration(BATCH_SEGMENTS)} (URL renovada a cada lote)`,
     );
+
+    const partPaths: string[] = [];
+    let segmentOffset = 0;
+    let bytesOffset = 0;
+    const startedAt = Date.now();
+
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i]!;
+      this.reporter.info(
+        `Lote ${i + 1}/${batches.length} (${formatSegmentDuration(batch.end - batch.start + 1)})...`,
+      );
+
+      const freshTemplate = await refreshTemplate();
+      const partPath = toPartPath(outputPath, i);
+
+      await this.segmentDownloader.download(
+        {
+          segmentTemplateUrl: freshTemplate,
+          startSq: batch.start,
+          endSq: batch.end,
+          outputPath: partPath,
+          concurrency: task.concurrency,
+          retries: task.retries,
+          timeoutSeconds: task.timeoutSeconds,
+          urlMode: "hls",
+          estimatedTotalBytes: undefined,
+          refreshVideoUrl: refreshTemplate,
+          knownMissingUntilSq: i === 0 ? knownMissingUntilSq : undefined,
+        },
+        (progress) =>
+          this.reporter.update(
+            new DownloadProgress(
+              bytesOffset + progress.downloadedBytes,
+              estimatedTotalBytes,
+              Date.now() - startedAt,
+              segmentOffset + progress.downloadedSegments,
+              totalSegments,
+            ),
+          ),
+      );
+
+      segmentOffset += batch.end - batch.start + 1;
+      try {
+        const stat = await Bun.file(partPath).stat();
+        bytesOffset += stat.size;
+      } catch {
+        /* best-effort */
+      }
+      partPaths.push(partPath);
+    }
+
+    this.reporter.info("Mesclando lotes...");
+    await concatMediaFiles(partPaths, outputPath);
   }
 
   private resolveDownloadRange(

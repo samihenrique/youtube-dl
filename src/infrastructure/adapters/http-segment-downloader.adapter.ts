@@ -7,7 +7,6 @@ import { DownloadProgress } from "../../domain/value-objects/download-progress.t
 import { resolveFfmpegBinary } from "../helpers/ffmpeg-resolver.ts";
 
 const AUTH_ERROR_CODES = new Set([401, 403]);
-const TOKEN_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const RETRY_BACKOFF_BASE_MS = 1_000;
 
 export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
@@ -54,6 +53,8 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
         "pipe:0",
         "-c",
         "copy",
+        "-f",
+        "mp4",
         "-avoid_negative_ts",
         "make_zero",
         "-movflags",
@@ -624,10 +625,6 @@ class RefreshableUrl {
     } finally {
       this._refreshPromise = null;
     }
-  }
-
-  needsProactiveRefresh(): boolean {
-    return Date.now() - this._lastRefreshAt > TOKEN_REFRESH_INTERVAL_MS;
   }
 
   private async _doRefresh(): Promise<boolean> {

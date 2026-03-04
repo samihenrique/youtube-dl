@@ -3,14 +3,20 @@ import type { VideoInfo } from "../../../domain/entities/video-info.ts";
 import { DownloadMode } from "../../../domain/enums/download-mode.ts";
 import { VideoType } from "../../../domain/enums/video-type.ts";
 import type { QualityOption } from "../../../domain/value-objects/quality-option.ts";
-import { getSmartDefaults } from "../defaults.ts";
+import { getSmartDefaults, MAX_CONCURRENCY } from "../defaults.ts";
 import {
   validateInteger,
   validateBitrate,
   validateOptionalInteger,
 } from "../validators/input.validators.ts";
 
-export type ActionChoice = "download" | "quality" | "customize" | "info" | "convert-files";
+export type ActionChoice =
+  | "download"
+  | "download-dvr"
+  | "quality"
+  | "customize"
+  | "info"
+  | "convert-files";
 
 function onCancel(): never {
   p.cancel("Tudo bem, até a próxima!");
@@ -31,6 +37,11 @@ export async function promptMainMenu(): Promise<ActionChoice> {
           value: "download",
           label: "Baixar vídeo do YouTube",
           hint: "cola o link e baixa",
+        },
+        {
+          value: "download-dvr",
+          label: "Baixar live DVR direto",
+          hint: "Do início, melhor qualidade, sem perguntas",
         },
         {
           value: "convert-files",
@@ -180,10 +191,11 @@ export async function promptCustomize(
     {
       concurrency: () =>
         p.text({
-          message: "Downloads paralelos (1-128):",
+          message: `Downloads paralelos (1-${MAX_CONCURRENCY}):`,
           defaultValue: String(defaults.concurrency),
           placeholder: String(defaults.concurrency),
-          validate: (v) => validateInteger(v, 1, 128, "Downloads paralelos"),
+          validate: (v) =>
+            validateInteger(v, 1, MAX_CONCURRENCY, "Downloads paralelos"),
         }),
       rateLimit: () =>
         p.text({
@@ -223,7 +235,10 @@ export async function promptCustomize(
     quality,
     liveMode,
     outputDir,
-    concurrency: Number(advanced.concurrency),
+    concurrency: Math.min(
+      Number(advanced.concurrency),
+      MAX_CONCURRENCY,
+    ),
     rateLimit: advanced.rateLimit.trim() || null,
     maxDuration: advanced.maxDuration.trim()
       ? Number(advanced.maxDuration.trim())

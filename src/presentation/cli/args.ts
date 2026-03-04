@@ -108,7 +108,14 @@ export function parseArgs(argv: string[]): ParsedArgs {
       DownloadMode.DvrStart,
       "Modo live",
     ),
-    concurrency: parseIntFlag(args, "--concurrency", 8, 1, 128, "Concorrência"),
+    concurrency: parseIntFlag(
+      args,
+      "--concurrency",
+      8,
+      1,
+      16,
+      "Concorrência",
+    ),
     maxDuration: (() => {
       const raw = findFlag(args, "--max-duration");
       if (!raw) return null;

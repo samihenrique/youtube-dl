@@ -4,6 +4,7 @@ import type { ConversionTask } from "../../domain/entities/conversion-task.ts";
 import type { DownloadTask } from "../../domain/entities/download-task.ts";
 import type { VideoInfo } from "../../domain/entities/video-info.ts";
 import { HardwareAccel } from "../../domain/enums/hardware-accel.ts";
+import { DownloadMode } from "../../domain/enums/download-mode.ts";
 import { VideoType } from "../../domain/enums/video-type.ts";
 import type { HardwareDetector } from "../../domain/ports/hardware-detector.port.ts";
 import { Bitrate } from "../../domain/value-objects/bitrate.ts";
@@ -28,7 +29,7 @@ import {
   buildConversionTask,
 } from "./prompts/conversion-options.prompt.ts";
 import { promptConvertFiles } from "./prompts/convert-files.prompt.ts";
-import { getSmartDefaults, isFfmpegAvailable } from "./defaults.ts";
+import { getSmartDefaults, isFfmpegAvailable, MAX_CONCURRENCY } from "./defaults.ts";
 import { handleError } from "./error-handler.ts";
 import {
   renderVideoCard,
@@ -76,6 +77,8 @@ export class CliApp {
 
       if (mainAction === "convert-files") {
         await this.runConvertFilesSession();
+      } else if (mainAction === "download-dvr") {
+        await this.runDvrDirectSession();
       } else {
         await this.runInteractiveSession();
       }
@@ -91,6 +94,78 @@ export class CliApp {
     }
 
     p.outro(pc.dim("Até a próxima!"));
+  }
+
+  private async runDvrDirectSession(): Promise<void> {
+    const url = await promptUrl();
+
+    const spinner = p.spinner();
+    spinner.start("Buscando informações do vídeo...");
+
+    let videoInfo: VideoInfo;
+    try {
+      videoInfo = await this.deps.resolveVideoInfo.execute(url);
+      spinner.stop("Vídeo encontrado!");
+    } catch (error: unknown) {
+      spinner.stop("Não foi possível encontrar o vídeo");
+      throw error;
+    }
+
+    renderVideoCard(videoInfo);
+
+    const isLive =
+      videoInfo.type === VideoType.Live ||
+      videoInfo.type === VideoType.PostLiveDvr;
+
+    if (!isLive) {
+      p.log.warn(
+        pc.yellow("Este vídeo não é uma live. Use 'Baixar vídeo' para vídeos normais."),
+      );
+      return;
+    }
+
+    const defaults = getSmartDefaults(videoInfo);
+    const task: DownloadTask = {
+      videoInfo,
+      outputDir: defaults.outputDir,
+      filenamePattern: defaults.filenamePattern,
+      overwrite: defaults.overwrite,
+      concurrency: MAX_CONCURRENCY,
+      maxDurationSeconds: null,
+      rateLimitBytesPerSecond: null,
+      retries: defaults.retries,
+      timeoutSeconds: defaults.timeout,
+      liveMode: DownloadMode.DvrStart,
+      qualityLabel: "best",
+      conversion: null,
+    };
+
+    renderDownloadSummary({
+      videoInfo,
+      quality: "Melhor disponível",
+      outputDir: task.outputDir,
+      liveMode: task.liveMode,
+      conversion: null,
+      concurrency: task.concurrency,
+    });
+
+    const confirmed = await p.confirm({
+      message: "Tudo certo, pode começar?",
+      initialValue: true,
+    });
+
+    if (p.isCancel(confirmed) || !confirmed) {
+      p.log.info(pc.dim("Download cancelado."));
+      return;
+    }
+
+    p.log.step(pc.cyan("[1/1]") + " Baixando DVR...");
+    await this.executeDownload(task);
+
+    console.log();
+    p.log.success(
+      pc.green(pc.bold("Pronto!")) + pc.dim(` Salvo em ${task.outputDir}`),
+    );
   }
 
   private async runConvertFilesSession(): Promise<void> {
@@ -279,7 +354,7 @@ export class CliApp {
       outputDir,
       filenamePattern: defaults.filenamePattern,
       overwrite: defaults.overwrite,
-      concurrency,
+      concurrency: Math.min(concurrency, MAX_CONCURRENCY),
       maxDurationSeconds: maxDuration,
       rateLimitBytesPerSecond: rateLimit
         ? new Bitrate(rateLimit).bitsPerSecond / 8
@@ -344,7 +419,7 @@ export class CliApp {
       outputDir: args.outputDir,
       filenamePattern: args.filenamePattern,
       overwrite: args.overwrite,
-      concurrency: args.concurrency,
+      concurrency: Math.min(args.concurrency, MAX_CONCURRENCY),
       maxDurationSeconds: args.maxDuration,
       rateLimitBytesPerSecond: args.rateLimit
         ? new Bitrate(args.rateLimit).bitsPerSecond / 8
