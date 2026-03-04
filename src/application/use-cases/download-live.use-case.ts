@@ -26,6 +26,7 @@ interface HlsDvrWindow {
 const EXTENDED_DVR_LOOKBACK_SEGMENTS = 8_640; // ~12h @ 5s/segmento
 const BATCH_THRESHOLD_SEGMENTS = 3_600; // ~5h: usa batch se total > este valor
 const BATCH_SEGMENTS = 180; // ~15min por lote (renova URL com mais frequência)
+const BATCH_RETRY_ATTEMPTS = 3; // tenta novamente lote em falhas transitórias
 
 function toPartPath(outputPath: string, partIndex: number): string {
   const extMatch = outputPath.match(/\.[^.]+$/);
@@ -339,34 +340,55 @@ export class DownloadLiveUseCase {
       nextUrlsPromise =
         i < batches.length - 1 ? refreshBoth() : null;
 
-      await this.segmentDownloader.download(
-        {
-          segmentTemplateUrl: freshVideoUrl,
-          audioTemplateUrl: freshAudioUrl,
-          startSq: batch.start,
-          endSq: batch.end,
-          outputPath: partPath,
-          concurrency: task.concurrency,
-          retries: task.retries,
-          timeoutSeconds: task.timeoutSeconds,
-          urlMode: "dash",
-          estimatedTotalBytes: undefined,
-          refreshVideoUrl,
-          refreshAudioUrl,
-          knownMissingUntilSq: i === 0 ? knownMissingUntilSq : undefined,
-          skipFaststart: true,
-        },
-        (progress) =>
-          this.reporter.update(
-            new DownloadProgress(
-              bytesOffset + progress.downloadedBytes,
-              runningEstimate,
-              Date.now() - startedAt,
-              segmentOffset + progress.downloadedSegments,
-              totalSegments,
-            ),
-          ),
-      );
+      let videoUrlForAttempt = freshVideoUrl;
+      let audioUrlForAttempt = freshAudioUrl;
+      let lastBatchError: unknown = null;
+
+      for (let attempt = 1; attempt <= BATCH_RETRY_ATTEMPTS; attempt++) {
+        try {
+          await this.segmentDownloader.download(
+            {
+              segmentTemplateUrl: videoUrlForAttempt,
+              audioTemplateUrl: audioUrlForAttempt,
+              startSq: batch.start,
+              endSq: batch.end,
+              outputPath: partPath,
+              concurrency: task.concurrency,
+              retries: task.retries,
+              timeoutSeconds: task.timeoutSeconds,
+              urlMode: "dash",
+              estimatedTotalBytes: undefined,
+              refreshVideoUrl,
+              refreshAudioUrl,
+              knownMissingUntilSq: i === 0 ? knownMissingUntilSq : undefined,
+              skipFaststart: true,
+            },
+            (progress) =>
+              this.reporter.update(
+                new DownloadProgress(
+                  bytesOffset + progress.downloadedBytes,
+                  runningEstimate,
+                  Date.now() - startedAt,
+                  segmentOffset + progress.downloadedSegments,
+                  totalSegments,
+                ),
+              ),
+          );
+          lastBatchError = null;
+          break;
+        } catch (error) {
+          lastBatchError = error;
+          if (attempt >= BATCH_RETRY_ATTEMPTS) break;
+          const message = error instanceof Error ? error.message : String(error);
+          this.reporter.info(
+            `Lote ${i + 1}/${batches.length} falhou (${message}). Tentando novamente (${attempt + 1}/${BATCH_RETRY_ATTEMPTS})...`,
+          );
+          [videoUrlForAttempt, audioUrlForAttempt] = await refreshBoth();
+        }
+      }
+      if (lastBatchError) {
+        throw lastBatchError;
+      }
 
       const batchSegments = batch.end - batch.start + 1;
       segmentOffset += batchSegments;
@@ -590,32 +612,52 @@ export class DownloadLiveUseCase {
       nextUrlPromise =
         i < batches.length - 1 ? refreshTemplate() : null;
 
-      await this.segmentDownloader.download(
-        {
-          segmentTemplateUrl: freshTemplate,
-          startSq: batch.start,
-          endSq: batch.end,
-          outputPath: partPath,
-          concurrency: task.concurrency,
-          retries: task.retries,
-          timeoutSeconds: task.timeoutSeconds,
-          urlMode: "hls",
-          estimatedTotalBytes: undefined,
-          refreshVideoUrl: refreshTemplate,
-          knownMissingUntilSq: i === 0 ? knownMissingUntilSq : undefined,
-          skipFaststart: true,
-        },
-        (progress) =>
-          this.reporter.update(
-            new DownloadProgress(
-              bytesOffset + progress.downloadedBytes,
-              runningEstimate,
-              Date.now() - startedAt,
-              segmentOffset + progress.downloadedSegments,
-              totalSegments,
-            ),
-          ),
-      );
+      let templateForAttempt = freshTemplate;
+      let lastBatchError: unknown = null;
+
+      for (let attempt = 1; attempt <= BATCH_RETRY_ATTEMPTS; attempt++) {
+        try {
+          await this.segmentDownloader.download(
+            {
+              segmentTemplateUrl: templateForAttempt,
+              startSq: batch.start,
+              endSq: batch.end,
+              outputPath: partPath,
+              concurrency: task.concurrency,
+              retries: task.retries,
+              timeoutSeconds: task.timeoutSeconds,
+              urlMode: "hls",
+              estimatedTotalBytes: undefined,
+              refreshVideoUrl: refreshTemplate,
+              knownMissingUntilSq: i === 0 ? knownMissingUntilSq : undefined,
+              skipFaststart: true,
+            },
+            (progress) =>
+              this.reporter.update(
+                new DownloadProgress(
+                  bytesOffset + progress.downloadedBytes,
+                  runningEstimate,
+                  Date.now() - startedAt,
+                  segmentOffset + progress.downloadedSegments,
+                  totalSegments,
+                ),
+              ),
+          );
+          lastBatchError = null;
+          break;
+        } catch (error) {
+          lastBatchError = error;
+          if (attempt >= BATCH_RETRY_ATTEMPTS) break;
+          const message = error instanceof Error ? error.message : String(error);
+          this.reporter.info(
+            `Lote ${i + 1}/${batches.length} falhou (${message}). Tentando novamente (${attempt + 1}/${BATCH_RETRY_ATTEMPTS})...`,
+          );
+          templateForAttempt = await refreshTemplate();
+        }
+      }
+      if (lastBatchError) {
+        throw lastBatchError;
+      }
 
       const batchSegments = batch.end - batch.start + 1;
       segmentOffset += batchSegments;

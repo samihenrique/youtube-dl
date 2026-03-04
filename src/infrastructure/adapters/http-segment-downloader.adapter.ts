@@ -71,32 +71,52 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
       });
     }
 
-    const safeWrite = (data: Uint8Array): void => {
+    const safeWrite = async (data: Uint8Array): Promise<void> => {
       if (ffmpegError) throw ffmpegError;
       try {
-        ffmpeg.stdin.write(data);
+        const writeResult = ffmpeg.stdin.write(data);
+        if (
+          writeResult &&
+          typeof (writeResult as Promise<unknown>).then === "function"
+        ) {
+          await writeResult;
+        }
       } catch (err) {
         ffmpegError = err instanceof Error ? err : new Error(String(err));
         throw ffmpegError;
       }
     };
 
-    function drainBuffer(): void {
-      if (ffmpegError) throw ffmpegError;
-      while (
-        pendingBuffer.has(nextSqToWrite) || missingSegments.has(nextSqToWrite)
-      ) {
-        if (missingSegments.has(nextSqToWrite)) {
-          missingSegments.delete(nextSqToWrite);
-          nextSqToWrite++;
-          continue;
-        }
-        const data = pendingBuffer.get(nextSqToWrite)!;
-        pendingBuffer.delete(nextSqToWrite);
-        safeWrite(data);
-        nextSqToWrite++;
+    let drainInFlight: Promise<void> | null = null;
+    const drainBuffer = async (): Promise<void> => {
+      if (drainInFlight) {
+        await drainInFlight;
+        return;
       }
-    }
+
+      drainInFlight = (async () => {
+        if (ffmpegError) throw ffmpegError;
+        while (
+          pendingBuffer.has(nextSqToWrite) || missingSegments.has(nextSqToWrite)
+        ) {
+          if (missingSegments.has(nextSqToWrite)) {
+            missingSegments.delete(nextSqToWrite);
+            nextSqToWrite++;
+            continue;
+          }
+          const data = pendingBuffer.get(nextSqToWrite)!;
+          pendingBuffer.delete(nextSqToWrite);
+          await safeWrite(data);
+          nextSqToWrite++;
+        }
+      })();
+
+      try {
+        await drainInFlight;
+      } finally {
+        drainInFlight = null;
+      }
+    };
 
     const firstFetchSq = Math.max(
       options.startSq,
@@ -107,7 +127,7 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
         missingSegments.add(sq);
       }
       processedSegments = firstFetchSq - options.startSq;
-      drainBuffer();
+      await drainBuffer();
       onProgress(
         new DownloadProgress(
           downloadedBytes,
@@ -140,7 +160,7 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
             missingSegments.add(currentSq);
           }
           processedSegments++;
-          drainBuffer();
+        await drainBuffer();
 
           onProgress(
             new DownloadProgress(
@@ -154,7 +174,7 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
         },
       );
 
-      drainBuffer();
+      await drainBuffer();
       await ffmpeg.stdin.end();
     } catch (err) {
       try {
