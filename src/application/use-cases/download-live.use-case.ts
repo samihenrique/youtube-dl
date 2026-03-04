@@ -319,18 +319,25 @@ export class DownloadLiveUseCase {
     const partPaths: string[] = [];
     let segmentOffset = 0;
     let bytesOffset = 0;
+    let runningEstimate: number | null = estimatedTotalBytes ?? null;
     const startedAt = Date.now();
+
+    const refreshBoth = () =>
+      Promise.all([refreshVideoUrl(), refreshAudioUrl()]);
+
+    let nextUrlsPromise: Promise<[string, string]> | null = refreshBoth();
 
     for (let i = 0; i < batches.length; i++) {
       const batch = batches[i]!;
       this.reporter.info(
-        `Lote ${i + 1}/${batches.length} (${formatSegmentDuration(batch.end - batch.start + 1)})...`,
+        `Lote ${i + 1}/${batches.length} (~${formatSegmentDuration(batch.end - batch.start + 1)})...`,
       );
 
-      const freshVideoUrl = await refreshVideoUrl();
-      const freshAudioUrl = await refreshAudioUrl();
-
+      const [freshVideoUrl, freshAudioUrl] = await nextUrlsPromise!;
       const partPath = toPartPath(outputPath, i);
+
+      nextUrlsPromise =
+        i < batches.length - 1 ? refreshBoth() : null;
 
       await this.segmentDownloader.download(
         {
@@ -353,7 +360,7 @@ export class DownloadLiveUseCase {
           this.reporter.update(
             new DownloadProgress(
               bytesOffset + progress.downloadedBytes,
-              estimatedTotalBytes ?? null,
+              runningEstimate,
               Date.now() - startedAt,
               segmentOffset + progress.downloadedSegments,
               totalSegments,
@@ -361,10 +368,13 @@ export class DownloadLiveUseCase {
           ),
       );
 
-      segmentOffset += batch.end - batch.start + 1;
+      const batchSegments = batch.end - batch.start + 1;
+      segmentOffset += batchSegments;
       try {
         const stat = await Bun.file(partPath).stat();
         bytesOffset += stat.size;
+        const avgBytesPerSegment = bytesOffset / segmentOffset;
+        runningEstimate = Math.round(avgBytesPerSegment * totalSegments);
       } catch {
         /* best-effort */
       }
@@ -563,16 +573,22 @@ export class DownloadLiveUseCase {
     const partPaths: string[] = [];
     let segmentOffset = 0;
     let bytesOffset = 0;
+    let runningEstimate = estimatedTotalBytes;
     const startedAt = Date.now();
+
+    let nextUrlPromise: Promise<string> | null = refreshTemplate();
 
     for (let i = 0; i < batches.length; i++) {
       const batch = batches[i]!;
       this.reporter.info(
-        `Lote ${i + 1}/${batches.length} (${formatSegmentDuration(batch.end - batch.start + 1)})...`,
+        `Lote ${i + 1}/${batches.length} (~${formatSegmentDuration(batch.end - batch.start + 1)})...`,
       );
 
-      const freshTemplate = await refreshTemplate();
+      const freshTemplate = await nextUrlPromise!;
       const partPath = toPartPath(outputPath, i);
+
+      nextUrlPromise =
+        i < batches.length - 1 ? refreshTemplate() : null;
 
       await this.segmentDownloader.download(
         {
@@ -593,7 +609,7 @@ export class DownloadLiveUseCase {
           this.reporter.update(
             new DownloadProgress(
               bytesOffset + progress.downloadedBytes,
-              estimatedTotalBytes,
+              runningEstimate,
               Date.now() - startedAt,
               segmentOffset + progress.downloadedSegments,
               totalSegments,
@@ -601,10 +617,13 @@ export class DownloadLiveUseCase {
           ),
       );
 
-      segmentOffset += batch.end - batch.start + 1;
+      const batchSegments = batch.end - batch.start + 1;
+      segmentOffset += batchSegments;
       try {
         const stat = await Bun.file(partPath).stat();
         bytesOffset += stat.size;
+        const avgBytesPerSegment = bytesOffset / segmentOffset;
+        runningEstimate = Math.round(avgBytesPerSegment * totalSegments);
       } catch {
         /* best-effort */
       }

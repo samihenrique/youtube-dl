@@ -30,7 +30,7 @@ export function getSmartDefaults(videoInfo: VideoInfo): SmartDefaults {
     overwrite: OverwriteBehavior.Rename,
     concurrency: Math.min(8, MAX_CONCURRENCY),
     retries: isLive ? 5 : 3,
-    timeout: isLive ? 45 : 30,
+    timeout: isLive ? 5 : 30,
   };
 }
 
