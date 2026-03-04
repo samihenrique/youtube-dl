@@ -79,6 +79,14 @@ https://example.com/audio-only.m3u8
       ).toBe(42);
     });
 
+    test("extrai sq quando a URL termina em /sq/<n>", () => {
+      expect(
+        parser.extractSqFromUrl(
+          "https://example.com/playlist/index.m3u8/sq/42",
+        ),
+      ).toBe(42);
+    });
+
     test("lança erro para URL sem sq", () => {
       expect(() =>
         parser.extractSqFromUrl("https://example.com/no-sq-here"),
@@ -93,6 +101,14 @@ https://example.com/audio-only.m3u8
         200,
       );
       expect(url).toBe("https://example.com/segment/sq/200/chunk.ts");
+    });
+
+    test("normaliza template HLS do YouTube para endpoint canônico de sq", () => {
+      const url = parser.buildSegmentUrl(
+        "https://example.com/playlist/index.m3u8/sq/100/govp/lmt%3D1/dur/5.000/file/seg.ts",
+        200,
+      );
+      expect(url).toBe("https://example.com/playlist/index.m3u8/sq/200");
     });
   });
 

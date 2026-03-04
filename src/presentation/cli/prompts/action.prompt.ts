@@ -180,10 +180,10 @@ export async function promptCustomize(
     {
       concurrency: () =>
         p.text({
-          message: "Downloads paralelos (1-256):",
+          message: "Downloads paralelos (1-128):",
           defaultValue: String(defaults.concurrency),
           placeholder: String(defaults.concurrency),
-          validate: (v) => validateInteger(v, 1, 256, "Downloads paralelos"),
+          validate: (v) => validateInteger(v, 1, 128, "Downloads paralelos"),
         }),
       rateLimit: () =>
         p.text({
@@ -202,14 +202,12 @@ export async function promptCustomize(
       retries: () =>
         p.text({
           message: "Tentativas por segmento (0-20):",
-          defaultValue: String(defaults.retries),
           placeholder: String(defaults.retries),
           validate: (v) => validateInteger(v, 0, 20, "Tentativas"),
         }),
       timeout: () =>
         p.text({
           message: "Timeout por requisição em segundos (5-300):",
-          defaultValue: String(defaults.timeout),
           placeholder: String(defaults.timeout),
           validate: (v) => validateInteger(v, 5, 300, "Timeout"),
         }),

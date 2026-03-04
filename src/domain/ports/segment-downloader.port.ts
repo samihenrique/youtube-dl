@@ -10,6 +10,8 @@ export interface SegmentDownloaderOptions {
   readonly retries: number;
   readonly timeoutSeconds: number;
   readonly urlMode: "hls" | "dash";
+  readonly estimatedTotalBytes?: number;
+  readonly knownMissingUntilSq?: number;
   readonly refreshVideoUrl?: () => Promise<string>;
   readonly refreshAudioUrl?: () => Promise<string>;
 }

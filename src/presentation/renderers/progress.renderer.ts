@@ -69,6 +69,11 @@ export class CliProgressRenderer implements ProgressReporter {
     const pctStr = pc.bold(`${pct.toFixed(1)}%`);
 
     const parts: string[] = [];
+    if (progress.totalSegments !== null && progress.totalSegments > 0) {
+      parts.push(
+        `${progress.downloadedSegments}/${progress.totalSegments} segmentos`,
+      );
+    }
     if (progress.totalBytes !== null && progress.totalBytes > 0) {
       parts.push(`${formatBytes(progress.downloadedBytes)} de ~${formatBytes(progress.totalBytes)}`);
     } else {

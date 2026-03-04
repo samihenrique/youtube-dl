@@ -4,11 +4,11 @@ import type {
   SegmentDownloaderOptions,
 } from "../../domain/ports/segment-downloader.port.ts";
 import { DownloadProgress } from "../../domain/value-objects/download-progress.ts";
-import { Semaphore } from "../concurrency/semaphore.ts";
 import { resolveFfmpegBinary } from "../helpers/ffmpeg-resolver.ts";
 
 const AUTH_ERROR_CODES = new Set([401, 403]);
 const TOKEN_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+const RETRY_BACKOFF_BASE_MS = 1_000;
 
 export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
   async download(
@@ -27,14 +27,19 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
     onProgress: (progress: DownloadProgress) => void,
   ): Promise<void> {
     const ffmpegBinary = await resolveFfmpegBinary();
-    const semaphore = new Semaphore(options.concurrency);
     const totalSegments = Math.max(0, options.endSq - options.startSq + 1);
     const startedAt = Date.now();
 
     let downloadedSegments = 0;
+    let processedSegments = 0;
     let downloadedBytes = 0;
     let nextSqToWrite = options.startSq;
     const pendingBuffer = new Map<number, Uint8Array>();
+    const missingSegments = new Set<number>();
+    const urlHolder = new RefreshableUrl(
+      options.segmentTemplateUrl,
+      options.refreshVideoUrl,
+    );
 
     const ffmpeg = Bun.spawn(
       [
@@ -59,7 +64,14 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
     );
 
     function drainBuffer(): void {
-      while (pendingBuffer.has(nextSqToWrite)) {
+      while (
+        pendingBuffer.has(nextSqToWrite) || missingSegments.has(nextSqToWrite)
+      ) {
+        if (missingSegments.has(nextSqToWrite)) {
+          missingSegments.delete(nextSqToWrite);
+          nextSqToWrite++;
+          continue;
+        }
         const data = pendingBuffer.get(nextSqToWrite)!;
         pendingBuffer.delete(nextSqToWrite);
         ffmpeg.stdin.write(data);
@@ -67,46 +79,69 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
       }
     }
 
-    const tasks: Array<Promise<void>> = [];
-
-    for (let sq = options.startSq; sq <= options.endSq; sq++) {
-      const currentSq = sq;
-      tasks.push(
-        semaphore.run(async () => {
-          const segmentUrl = this.buildUrl(
-            options.segmentTemplateUrl,
-            currentSq,
-            "hls",
-          );
-          const data = await this.fetchSegmentWithRetry(
-            segmentUrl,
-            options.retries,
-            options.timeoutSeconds,
-          );
-
-          if (data) {
-            downloadedBytes += data.byteLength;
-            downloadedSegments++;
-            pendingBuffer.set(currentSq, data);
-            drainBuffer();
-          }
-
-          onProgress(
-            new DownloadProgress(
-              downloadedBytes,
-              null,
-              Date.now() - startedAt,
-              downloadedSegments,
-              totalSegments,
-            ),
-          );
-        }),
+    const firstFetchSq = Math.max(
+      options.startSq,
+      (options.knownMissingUntilSq ?? options.startSq - 1) + 1,
+    );
+    if (firstFetchSq > options.startSq) {
+      for (let sq = options.startSq; sq < firstFetchSq; sq++) {
+        missingSegments.add(sq);
+      }
+      processedSegments = firstFetchSq - options.startSq;
+      drainBuffer();
+      onProgress(
+        new DownloadProgress(
+          downloadedBytes,
+          options.estimatedTotalBytes ?? null,
+          Date.now() - startedAt,
+          processedSegments,
+          totalSegments,
+        ),
       );
     }
 
-    await Promise.all(tasks);
+    await this.runWithWorkerPool(
+      firstFetchSq,
+      options.endSq,
+      options.concurrency,
+      async (currentSq) => {
+        const data = await this.fetchHlsSegmentWithRefresh(
+          urlHolder,
+          currentSq,
+          options.retries,
+          options.timeoutSeconds,
+        );
+
+        if (data) {
+          downloadedBytes += data.byteLength;
+          downloadedSegments++;
+          pendingBuffer.set(currentSq, data);
+        } else {
+          missingSegments.add(currentSq);
+        }
+        processedSegments++;
+        drainBuffer();
+
+        onProgress(
+          new DownloadProgress(
+            downloadedBytes,
+            options.estimatedTotalBytes ?? null,
+            Date.now() - startedAt,
+            processedSegments,
+            totalSegments,
+          ),
+        );
+      },
+    );
+
     drainBuffer();
     await ffmpeg.stdin.end();
+
+    if (downloadedSegments === 0) {
+      throw new DownloadFailedError(
+        "HLS: nenhum segmento de mídia foi baixado.",
+      );
+    }
 
     const exitCode = await ffmpeg.exited;
     if (exitCode !== 0) {
@@ -138,7 +173,7 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
       onProgress(
         new DownloadProgress(
           videoBytes + audioBytes,
-          null,
+          options.estimatedTotalBytes ?? null,
           Date.now() - startedAt,
           completedSegs,
           totalSegments,
@@ -244,14 +279,15 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
     options: SegmentDownloaderOptions,
     onProgress: (bytes: number, segments: number) => void,
   ): Promise<void> {
-    const semaphore = new Semaphore(options.concurrency);
     const file = Bun.file(outputPath);
     const writer = file.writer();
 
     let downloadedBytes = 0;
     let downloadedSegments = 0;
+    let processedSegments = 0;
     let nextSqToWrite = startSq;
     const pendingBuffer = new Map<number, Uint8Array>();
+    const missingSegments = new Set<number>();
 
     const initSegment = await this.fetchDashSegmentWithRefresh(
       urlHolder,
@@ -259,13 +295,24 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
       options.retries,
       options.timeoutSeconds,
     );
-    if (initSegment) {
-      writer.write(initSegment);
-      downloadedBytes += initSegment.byteLength;
+    if (!initSegment) {
+      await writer.end();
+      throw new DownloadFailedError(
+        "DASH: falha ao baixar segmento de inicialização (sq=0).",
+      );
     }
+    writer.write(initSegment);
+    downloadedBytes += initSegment.byteLength;
 
     function drainBuffer(): void {
-      while (pendingBuffer.has(nextSqToWrite)) {
+      while (
+        pendingBuffer.has(nextSqToWrite) || missingSegments.has(nextSqToWrite)
+      ) {
+        if (missingSegments.has(nextSqToWrite)) {
+          missingSegments.delete(nextSqToWrite);
+          nextSqToWrite++;
+          continue;
+        }
         const data = pendingBuffer.get(nextSqToWrite)!;
         pendingBuffer.delete(nextSqToWrite);
         writer.write(data);
@@ -273,34 +320,76 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
       }
     }
 
-    const tasks: Array<Promise<void>> = [];
-
-    for (let sq = startSq; sq <= endSq; sq++) {
-      const currentSq = sq;
-      tasks.push(
-        semaphore.run(async () => {
-          const data = await this.fetchDashSegmentWithRefresh(
-            urlHolder,
-            currentSq,
-            options.retries,
-            options.timeoutSeconds,
-          );
-
-          if (data) {
-            downloadedBytes += data.byteLength;
-            downloadedSegments++;
-            pendingBuffer.set(currentSq, data);
-            drainBuffer();
-          }
-
-          onProgress(downloadedBytes, downloadedSegments);
-        }),
-      );
+    const firstFetchSq = Math.max(
+      startSq,
+      (options.knownMissingUntilSq ?? startSq - 1) + 1,
+    );
+    if (firstFetchSq > startSq) {
+      for (let sq = startSq; sq < firstFetchSq; sq++) {
+        missingSegments.add(sq);
+      }
+      processedSegments = firstFetchSq - startSq;
+      drainBuffer();
+      onProgress(downloadedBytes, processedSegments);
     }
 
-    await Promise.all(tasks);
+    await this.runWithWorkerPool(
+      firstFetchSq,
+      endSq,
+      options.concurrency,
+      async (currentSq) => {
+        const data = await this.fetchDashSegmentWithRefresh(
+          urlHolder,
+          currentSq,
+          options.retries,
+          options.timeoutSeconds,
+        );
+
+        if (data) {
+          downloadedBytes += data.byteLength;
+          downloadedSegments++;
+          pendingBuffer.set(currentSq, data);
+        } else {
+          missingSegments.add(currentSq);
+        }
+        processedSegments++;
+        drainBuffer();
+
+        onProgress(downloadedBytes, processedSegments);
+      },
+    );
+
     drainBuffer();
     await writer.end();
+
+    if (downloadedSegments === 0) {
+      throw new DownloadFailedError(
+        "DASH: nenhum segmento de mídia foi baixado.",
+      );
+    }
+  }
+
+  private async runWithWorkerPool(
+    startSq: number,
+    endSq: number,
+    concurrency: number,
+    worker: (sq: number) => Promise<void>,
+  ): Promise<void> {
+    if (endSq < startSq) return;
+
+    const totalSegments = endSq - startSq + 1;
+    const workerCount = Math.max(1, Math.min(concurrency, totalSegments));
+    let nextSq = startSq;
+
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const currentSq = nextSq++;
+        if (currentSq > endSq) return;
+        await worker(currentSq);
+      }
+    });
+
+    await Promise.all(workers);
   }
 
   private async fetchDashSegmentWithRefresh(
@@ -326,21 +415,45 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
         });
         clearTimeout(timer);
 
+        if (sq === 0 && response.status === 404) {
+          return null;
+        }
+
+        if (response.status === 404 || response.status === 410) {
+          return null;
+        }
+
         if (AUTH_ERROR_CODES.has(response.status)) {
-          const refreshed = await urlHolder.refresh();
+          const refreshed = await urlHolder.refresh(true);
           if (refreshed) {
             const retryUrl = this.buildUrl(urlHolder.current, sq, "dash");
-            const retryResp = await fetch(retryUrl);
+            const retryResp = await fetch(retryUrl, {
+              signal: controller.signal,
+            });
             if (retryResp.ok) {
               return new Uint8Array(await retryResp.arrayBuffer());
             }
+            if (sq === 0 && retryResp.status === 404) {
+              return null;
+            }
+            if (retryResp.status === 404 || retryResp.status === 410) {
+              return null;
+            }
+            lastError = new Error(`HTTP ${retryResp.status}`);
+          } else {
+            lastError = new Error(`HTTP ${response.status}`);
           }
-          lastError = new Error(`HTTP ${response.status}`);
+          if (attempt < maxRetries) {
+            await this.delayRetry(attempt);
+          }
           continue;
         }
 
         if (!response.ok) {
           lastError = new Error(`HTTP ${response.status}`);
+          if (attempt < maxRetries) {
+            await this.delayRetry(attempt);
+          }
           continue;
         }
 
@@ -348,27 +461,37 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
       } catch (error: unknown) {
         lastError = error;
         if (attempt < maxRetries) {
-          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          await this.delayRetry(attempt);
         }
       }
     }
 
     const message =
       lastError instanceof Error ? lastError.message : String(lastError);
+    if (sq === 0 && message === "HTTP 404") {
+      return null;
+    }
+    if (message === "HTTP 401" || message === "HTTP 403") {
+      throw new DownloadFailedError(
+        `DASH: falha de autenticação ao baixar segmento sq=${sq} (${message}).`,
+      );
+    }
     console.error(
       `[warn] Segmento sq=${sq} falhou após ${maxRetries + 1} tentativas: ${message}`,
     );
     return null;
   }
 
-  private async fetchSegmentWithRetry(
-    url: string,
+  private async fetchHlsSegmentWithRefresh(
+    urlHolder: RefreshableUrl,
+    sq: number,
     maxRetries: number,
     timeoutSeconds: number,
   ): Promise<Uint8Array | null> {
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const segmentUrl = this.buildUrl(urlHolder.current, sq, "hls");
       try {
         const controller = new AbortController();
         const timer = setTimeout(
@@ -376,11 +499,41 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
           timeoutSeconds * 1000,
         );
 
-        const response = await fetch(url, { signal: controller.signal });
+        const response = await fetch(segmentUrl, { signal: controller.signal });
         clearTimeout(timer);
+
+        if (response.status === 404 || response.status === 410) {
+          return null;
+        }
+
+        if (AUTH_ERROR_CODES.has(response.status)) {
+          const refreshed = await urlHolder.refresh(true);
+          if (refreshed) {
+            const retryUrl = this.buildUrl(urlHolder.current, sq, "hls");
+            const retryResp = await fetch(retryUrl, {
+              signal: controller.signal,
+            });
+            if (retryResp.ok) {
+              return new Uint8Array(await retryResp.arrayBuffer());
+            }
+            if (retryResp.status === 404 || retryResp.status === 410) {
+              return null;
+            }
+            lastError = new Error(`HTTP ${retryResp.status}`);
+          } else {
+            lastError = new Error(`HTTP ${response.status}`);
+          }
+          if (attempt < maxRetries) {
+            await this.delayRetry(attempt);
+          }
+          continue;
+        }
 
         if (!response.ok) {
           lastError = new Error(`HTTP ${response.status}`);
+          if (attempt < maxRetries) {
+            await this.delayRetry(attempt);
+          }
           continue;
         }
 
@@ -388,13 +541,21 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
       } catch (error: unknown) {
         lastError = error;
         if (attempt < maxRetries) {
-          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          await this.delayRetry(attempt);
         }
       }
     }
 
     const message =
       lastError instanceof Error ? lastError.message : String(lastError);
+    if (message === "HTTP 404" || message === "HTTP 410") {
+      return null;
+    }
+    if (message === "HTTP 401" || message === "HTTP 403") {
+      throw new DownloadFailedError(
+        `HLS: falha de autenticação ao baixar segmento sq=${sq} (${message}).`,
+      );
+    }
     console.error(
       `[warn] Segmento falhou após ${maxRetries + 1} tentativas: ${message}`,
     );
@@ -411,7 +572,22 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
       url.searchParams.set("sq", String(sq));
       return url.toString();
     }
+    if (template.includes("/playlist/index.m3u8/sq/")) {
+      const normalized = template.replace(
+        /(\/playlist\/index\.m3u8\/sq\/)\d+(?:\/.*)?$/,
+        `$1${sq}`,
+      );
+      if (normalized !== template) {
+        return normalized;
+      }
+    }
     return template.replace(/\/sq\/\d+\//, `/sq/${sq}/`);
+  }
+
+  private async delayRetry(attempt: number): Promise<void> {
+    await new Promise((r) =>
+      setTimeout(r, RETRY_BACKOFF_BASE_MS * (attempt + 1)),
+    );
   }
 }
 
@@ -424,18 +600,17 @@ class RefreshableUrl {
   constructor(initialUrl: string, refreshFn?: () => Promise<string>) {
     this._current = initialUrl;
     this._refreshFn = refreshFn;
-    this._lastRefreshAt = Date.now();
   }
 
   get current(): string {
     return this._current;
   }
 
-  async refresh(): Promise<boolean> {
+  async refresh(force = false): Promise<boolean> {
     if (!this._refreshFn) return false;
 
     const now = Date.now();
-    if (now - this._lastRefreshAt < 5_000) {
+    if (!force && now - this._lastRefreshAt < 5_000) {
       return false;
     }
 

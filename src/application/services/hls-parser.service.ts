@@ -47,7 +47,7 @@ export class HlsParserService {
   }
 
   extractSqFromUrl(segmentUrl: string): number {
-    const match = /\/sq\/(\d+)\//.exec(segmentUrl);
+    const match = /\/sq\/(\d+)(?:\/|$)/.exec(segmentUrl);
     if (!match) {
       throw new Error(
         "Não foi possível identificar o índice de segmento (sq) na URL do segmento.",
@@ -57,6 +57,17 @@ export class HlsParserService {
   }
 
   buildSegmentUrl(templateUrl: string, sq: number): string {
+    // No YouTube HLS, o sufixo após /playlist/index.m3u8/sq/<n> varia por segmento.
+    // Mantemos somente o prefixo canônico para trocar sq de forma estável.
+    if (templateUrl.includes("/playlist/index.m3u8/sq/")) {
+      const normalized = templateUrl.replace(
+        /(\/playlist\/index\.m3u8\/sq\/)\d+(?:\/.*)?$/,
+        `$1${sq}`,
+      );
+      if (normalized !== templateUrl) {
+        return normalized;
+      }
+    }
     return templateUrl.replace(/\/sq\/\d+\//, `/sq/${sq}/`);
   }
 

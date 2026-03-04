@@ -12,6 +12,17 @@ import type { HlsParserService } from "../services/hls-parser.service.ts";
 import type { SegmentDiscoveryService } from "../services/segment-discovery.service.ts";
 import { buildOutputPath, resolveExistingFile } from "./shared/output-path.ts";
 
+interface HlsDvrWindow {
+  firstUrl: string;
+  earliestSq: number;
+  latestSq: number;
+  variantHeight: number | null;
+  variantBandwidth: number | null;
+  refreshTemplate: () => Promise<string>;
+}
+
+const EXTENDED_DVR_LOOKBACK_SEGMENTS = 8_640; // ~12h @ 5s/segmento
+
 export class DownloadLiveUseCase {
   constructor(
     private readonly segmentDownloader: SegmentDownloader,
@@ -83,17 +94,33 @@ export class DownloadLiveUseCase {
     task: DownloadTask,
     outputPath: string,
   ): Promise<void> {
+    const dvrWindow = await this.resolveHlsDvrWindow(task);
+
     const dashFormats = task.videoInfo.dashFormats;
     const hasDash = dashFormats.length > 0;
 
     if (hasDash) {
-      await this.downloadDvrDash(task, outputPath);
+      try {
+        await this.downloadDvrDash(task, outputPath, dvrWindow);
+        return;
+      } catch (error: unknown) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        this.reporter.info(
+          `DASH falhou (${message}). Tentando DVR via HLS...`,
+        );
+      }
     } else {
-      await this.downloadDvrHls(task, outputPath);
+      this.reporter.info("DASH indisponível. Usando DVR via HLS...");
     }
+
+    await this.downloadDvrHls(task, outputPath, dvrWindow);
   }
 
-  private selectDashFormats(dashFormats: readonly DashFormat[]): {
+  private selectDashFormats(
+    dashFormats: readonly DashFormat[],
+    qualityLabel: string,
+  ): {
     video: DashFormat;
     audio: DashFormat;
   } {
@@ -110,7 +137,7 @@ export class DownloadLiveUseCase {
       );
     }
 
-    const video = videoFormats.sort((a, b) => b.bitrate - a.bitrate)[0]!;
+    const video = this.selectDashVideoFormat(videoFormats, qualityLabel);
     const audio =
       audioFormats
         .filter(
@@ -121,6 +148,35 @@ export class DownloadLiveUseCase {
       audioFormats.sort((a, b) => b.bitrate - a.bitrate)[0]!;
 
     return { video, audio };
+  }
+
+  private selectDashVideoFormat(
+    videoFormats: readonly DashFormat[],
+    qualityLabel: string,
+  ): DashFormat {
+    const byBitrate = [...videoFormats].sort((a, b) => b.bitrate - a.bitrate);
+    const best = byBitrate[0]!;
+
+    if (qualityLabel === "best" || qualityLabel === "audio-only") {
+      return best;
+    }
+
+    const exactLabelMatches = videoFormats.filter(
+      (f) => f.qualityLabel === qualityLabel,
+    );
+    if (exactLabelMatches.length > 0) {
+      return [...exactLabelMatches].sort((a, b) => b.bitrate - a.bitrate)[0]!;
+    }
+
+    const requestedHeight = this.parseHeightLabel(qualityLabel);
+    if (requestedHeight !== null) {
+      const heightMatches = videoFormats.filter((f) => f.height === requestedHeight);
+      if (heightMatches.length > 0) {
+        return [...heightMatches].sort((a, b) => b.bitrate - a.bitrate)[0]!;
+      }
+    }
+
+    return best;
   }
 
   private async getFreshDashUrl(
@@ -144,61 +200,31 @@ export class DownloadLiveUseCase {
   private async downloadDvrDash(
     task: DownloadTask,
     outputPath: string,
+    dvrWindow: HlsDvrWindow,
   ): Promise<void> {
     const { video: videoFormat, audio: audioFormat } = this.selectDashFormats(
       task.videoInfo.dashFormats,
+      task.qualityLabel,
     );
 
     this.reporter.info(
       `Formato: ${videoFormat.qualityLabel ?? "melhor"} (${Math.round(videoFormat.bitrate / 1000)}kbps vídeo + ${Math.round(audioFormat.bitrate / 1000)}kbps áudio)`,
     );
 
-    const latestSq = await this.findLatestSqFromHls(task);
+    const { earliestSq, latestSq } = dvrWindow;
 
-    const buildDashUrl = (template: string, sq: number) => {
-      const url = new URL(template);
-      url.searchParams.set("sq", String(sq));
-      return url.toString();
-    };
-
-    const dashChecker = async (url: string): Promise<boolean> => {
-      const response = await fetch(url, { headers: { Range: "bytes=0-64" } });
-      if (response.status === 404 || response.status === 410) return false;
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = new Uint8Array(await response.arrayBuffer());
-      return data.byteLength > 0;
-    };
-
-    const { SegmentDiscoveryService: SDS } = await import(
-      "../services/segment-discovery.service.ts"
-    );
-    const dashDiscovery = new SDS(
-      dashChecker,
-      buildDashUrl,
-      (msg) => this.reporter.info(msg),
-    );
-
-    const refreshVideoTemplate = async (): Promise<string> => {
-      return this.getFreshDashUrl(task.videoInfo.id, videoFormat.itag, "video");
-    };
-
-    this.reporter.info("Procurando início da gravação...");
-
-    const earliestSq = await dashDiscovery.findEarliestAvailableSq(
-      videoFormat.url,
+    const { startSq, endSq, knownMissingUntilSq } = this.resolveDownloadRange(
+      task,
+      earliestSq,
       latestSq,
-      refreshVideoTemplate,
     );
-
-    let startSq = earliestSq;
-    let endSq = latestSq;
-    if (task.maxDurationSeconds !== null) {
-      const maxSegments = Math.max(1, Math.ceil(task.maxDurationSeconds / 5));
-      startSq = Math.max(earliestSq, latestSq - maxSegments + 1);
-    }
 
     const totalSegments = endSq - startSq + 1;
     const totalDvrSegments = latestSq - earliestSq + 1;
+    const estimatedTotalBytes = this.estimateTotalBytes(
+      totalSegments,
+      videoFormat.bitrate + audioFormat.bitrate,
+    );
 
     this.reporter.info(
       `Janela DVR: ${totalDvrSegments} segmentos (${formatSegmentDuration(totalDvrSegments)})`,
@@ -235,42 +261,38 @@ export class DownloadLiveUseCase {
         retries: task.retries,
         timeoutSeconds: task.timeoutSeconds,
         urlMode: "dash",
+        estimatedTotalBytes,
         refreshVideoUrl,
         refreshAudioUrl,
+        knownMissingUntilSq,
       },
       (progress) => this.reporter.update(progress),
     );
   }
 
-  private async findLatestSqFromHls(task: DownloadTask): Promise<number> {
-    const manifestText = await this.fetchText(task.videoInfo.hlsManifestUrl!);
-    const variants = this.hlsParser.parseVariants(manifestText);
-
-    if (variants.length === 0) {
-      throw new DownloadFailedError(
-        "Não foi possível extrair variantes HLS do manifesto.",
-      );
+  private selectHlsVariant(
+    variants: ReturnType<HlsParserService["parseVariants"]>,
+    qualityLabel: string,
+  ) {
+    if (qualityLabel === "best" || qualityLabel === "audio-only") {
+      return variants[0]!;
     }
 
-    const chosen = variants[0]!;
-    const variantManifestText = await this.fetchText(chosen.url);
-    const segmentUrls = this.hlsParser.parseSegmentUrls(variantManifestText);
-
-    if (segmentUrls.length === 0) {
-      throw new DownloadFailedError(
-        "Não foi possível extrair segmentos do manifesto HLS.",
-      );
+    const requestedHeight = this.parseHeightLabel(qualityLabel);
+    if (requestedHeight !== null) {
+      const exact = variants.find((v) => v.resolution?.height === requestedHeight);
+      if (exact) return exact;
     }
 
-    return this.hlsParser.extractSqFromUrl(
-      segmentUrls[segmentUrls.length - 1]!,
-    );
+    return variants[0]!;
   }
 
-  private async downloadDvrHls(
-    task: DownloadTask,
-    outputPath: string,
-  ): Promise<void> {
+  private parseHeightLabel(label: string): number | null {
+    const match = /^(\d{3,4})p$/i.exec(label.trim());
+    return match ? Number(match[1]) : null;
+  }
+
+  private async resolveHlsDvrWindow(task: DownloadTask): Promise<HlsDvrWindow> {
     const manifestText = await this.fetchText(task.videoInfo.hlsManifestUrl!);
     const variants = this.hlsParser.parseVariants(manifestText);
 
@@ -280,7 +302,7 @@ export class DownloadLiveUseCase {
       );
     }
 
-    const chosen = variants[0]!;
+    const chosen = this.selectHlsVariant(variants, task.qualityLabel);
     const variantManifestText = await this.fetchText(chosen.url);
     const segmentUrls = this.hlsParser.parseSegmentUrls(variantManifestText);
 
@@ -305,7 +327,8 @@ export class DownloadLiveUseCase {
           "Falha ao renovar manifesto HLS: sem variantes.",
         );
       }
-      const freshVariantText = await this.fetchText(freshVariants[0]!.url);
+      const freshChosen = this.selectHlsVariant(freshVariants, task.qualityLabel);
+      const freshVariantText = await this.fetchText(freshChosen.url);
       const freshSegments =
         this.hlsParser.parseSegmentUrls(freshVariantText);
       if (freshSegments.length === 0) {
@@ -316,23 +339,57 @@ export class DownloadLiveUseCase {
       return freshSegments[0]!;
     };
 
+    if (chosen.resolution?.height) {
+      this.reporter.info(`Formato HLS: ${chosen.resolution.height}p`);
+    }
     this.reporter.info("Procurando início da gravação...");
-
     const earliestSq = await this.segmentDiscovery.findEarliestAvailableSq(
       firstUrl,
       latestSq,
       refreshTemplate,
     );
 
-    let startSq = earliestSq;
-    let endSq = latestSq;
-    if (task.maxDurationSeconds !== null) {
-      const maxSegments = Math.max(1, Math.ceil(task.maxDurationSeconds / 5));
-      startSq = Math.max(earliestSq, latestSq - maxSegments + 1);
+    return {
+      firstUrl,
+      earliestSq,
+      latestSq,
+      variantHeight: chosen.resolution?.height ?? null,
+      variantBandwidth: chosen.bandwidth > 0 ? chosen.bandwidth : null,
+      refreshTemplate,
+    };
+  }
+
+  private async downloadDvrHls(
+    task: DownloadTask,
+    outputPath: string,
+    dvrWindow: HlsDvrWindow,
+  ): Promise<void> {
+    const {
+      firstUrl,
+      earliestSq,
+      latestSq,
+      variantHeight,
+      variantBandwidth,
+      refreshTemplate,
+    } =
+      dvrWindow;
+
+    if (variantHeight !== null) {
+      this.reporter.info(`Formato: ${variantHeight}p (HLS)`);
     }
+
+    const { startSq, endSq, knownMissingUntilSq } = this.resolveDownloadRange(
+      task,
+      earliestSq,
+      latestSq,
+    );
 
     const totalSegments = endSq - startSq + 1;
     const totalDvrSegments = latestSq - earliestSq + 1;
+    const estimatedTotalBytes = this.estimateTotalBytes(
+      totalSegments,
+      variantBandwidth,
+    );
 
     this.reporter.info(
       `Janela DVR: ${totalDvrSegments} segmentos (${formatSegmentDuration(totalDvrSegments)})`,
@@ -351,9 +408,47 @@ export class DownloadLiveUseCase {
         retries: task.retries,
         timeoutSeconds: task.timeoutSeconds,
         urlMode: "hls",
+        estimatedTotalBytes,
+        refreshVideoUrl: refreshTemplate,
+        knownMissingUntilSq,
       },
       (progress) => this.reporter.update(progress),
     );
+  }
+
+  private resolveDownloadRange(
+    task: DownloadTask,
+    earliestSq: number,
+    latestSq: number,
+  ): { startSq: number; endSq: number; knownMissingUntilSq?: number } {
+    let startSq = earliestSq;
+    const endSq = latestSq;
+    let knownMissingUntilSq: number | undefined;
+
+    if (task.maxDurationSeconds !== null) {
+      const maxSegments = Math.max(1, Math.ceil(task.maxDurationSeconds / 5));
+      startSq = Math.max(earliestSq, latestSq - maxSegments + 1);
+      return { startSq, endSq };
+    }
+
+    // Modo estendido: tenta ~12h mesmo que a descoberta ache menos,
+    // pulando segmentos indisponíveis (comportamento próximo ao yt-dlp).
+    const extendedStart = Math.max(1, latestSq - EXTENDED_DVR_LOOKBACK_SEGMENTS + 1);
+    if (extendedStart < startSq) {
+      this.reporter.info(
+        "Varredura estendida ativa: tentando até ~12h e ignorando segmentos indisponíveis.",
+      );
+      knownMissingUntilSq = earliestSq - 1;
+      const skipped = Math.max(0, knownMissingUntilSq - extendedStart + 1);
+      if (skipped > 0) {
+        this.reporter.info(
+          `Ignorando ${skipped} segmentos iniciais já indisponíveis na janela estendida.`,
+        );
+      }
+      startSq = extendedStart;
+    }
+
+    return { startSq, endSq, knownMissingUntilSq };
   }
 
   private async fetchText(url: string): Promise<string> {
@@ -364,5 +459,14 @@ export class DownloadLiveUseCase {
       );
     }
     return response.text();
+  }
+
+  private estimateTotalBytes(
+    totalSegments: number,
+    bitrateBps: number | null,
+  ): number | undefined {
+    if (!bitrateBps || bitrateBps <= 0) return undefined;
+    const totalSeconds = totalSegments * 5;
+    return Math.round((bitrateBps * totalSeconds) / 8);
   }
 }

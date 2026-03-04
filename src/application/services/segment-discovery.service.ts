@@ -1,5 +1,3 @@
-const DEFAULT_MAX_LOOKBACK_SEGMENTS = 8_640; // 12h × 720 seg/h
-
 export type DiscoveryLogger = (message: string) => void;
 
 export class SegmentDiscoveryService {
@@ -13,14 +11,17 @@ export class SegmentDiscoveryService {
     segmentTemplateUrl: string,
     latestSq: number,
     refreshTemplate?: () => Promise<string>,
-    maxLookbackSegments: number = DEFAULT_MAX_LOOKBACK_SEGMENTS,
+    maxLookbackSegments?: number,
   ): Promise<number> {
     let currentTemplate = segmentTemplateUrl;
     let lowerBound = latestSq;
     let step = 1;
     let templateIsFresh = false;
 
-    const absoluteMin = Math.max(1, latestSq - maxLookbackSegments);
+    const absoluteMin =
+      typeof maxLookbackSegments === "number"
+        ? Math.max(1, latestSq - maxLookbackSegments)
+        : 1;
 
     while (true) {
       const candidate = latestSq - step;
@@ -31,7 +32,7 @@ export class SegmentDiscoveryService {
       }
 
       const estimatedHours = ((step * 5) / 3600).toFixed(1);
-      this.log(`Verificando ~${estimatedHours}h atrás...`);
+      this.log(`Sondando limite da janela (~${estimatedHours}h atrás)...`);
 
       const exists = await this.probeWithRefresh(
         currentTemplate,

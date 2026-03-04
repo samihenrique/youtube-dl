@@ -17,7 +17,7 @@ export class YoutubeInfoAdapter implements VideoInfoProvider {
 
   async resolve(videoId: string): Promise<VideoInfo> {
     const yt = await this.getClient();
-    const info = await yt.getInfo(videoId, { client: "ANDROID" });
+    const info = await this.getInfoWithFallback(yt, videoId);
 
     const title =
       typeof info.basic_info?.title === "string"
@@ -40,6 +40,26 @@ export class YoutubeInfoAdapter implements VideoInfoProvider {
       qualities,
       dashFormats,
     };
+  }
+
+  private async getInfoWithFallback(yt: Innertube, videoId: string) {
+    const clients: Array<"IOS" | "WEB" | "default"> = ["IOS", "default", "WEB"];
+    let lastError: unknown;
+
+    for (const client of clients) {
+      try {
+        if (client === "default") {
+          return await yt.getInfo(videoId);
+        }
+        return await yt.getInfo(videoId, { client });
+      } catch (error: unknown) {
+        lastError = error;
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Falha ao obter dados do YouTube.");
   }
 
   private detectType(basic: unknown): VideoType {
