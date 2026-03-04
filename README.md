@@ -80,7 +80,7 @@ You can also set `YOUTUBE_LIVE_URL` as an environment variable as a fallback whe
 | `--quality <q>` | Video quality (best, 1080p, 720p, etc.) | best |
 | `--live-mode <mode>` | Live stream mode: `dvr-start` or `live-now` | dvr-start |
 | `--concurrency <n>` | Parallel segment downloads (1-128) | 8 |
-| `--max-duration <s>` | Max duration in seconds | unlimited |
+| `--max-duration <s>` | Max duration in seconds (max 12h) | unlimited |
 | `--rate-limit <r>` | Bandwidth limit (e.g., `10M`, `500K`) | unlimited |
 | `--retries <n>` | Retries per segment (0-20) | 3 |
 | `--timeout <s>` | Request timeout in seconds (5-300) | 30 |

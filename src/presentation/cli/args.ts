@@ -113,10 +113,17 @@ export function parseArgs(argv: string[]): ParsedArgs {
       const raw = findFlag(args, "--max-duration");
       if (!raw) return null;
       const num = Number(raw);
+      const maxSeconds = 12 * 3600;
       if (!Number.isInteger(num) || num <= 0) {
         throw new InvalidInputError(
           "Duração máxima",
           "deve ser um inteiro positivo",
+        );
+      }
+      if (num > maxSeconds) {
+        throw new InvalidInputError(
+          "Duração máxima",
+          `máximo é 12 horas (${maxSeconds} segundos)`,
         );
       }
       return num;

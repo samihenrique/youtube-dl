@@ -7,7 +7,7 @@ import { getSmartDefaults } from "../defaults.ts";
 import {
   validateInteger,
   validateBitrate,
-  validatePositiveInteger,
+  validateOptionalInteger,
 } from "../validators/input.validators.ts";
 
 export type ActionChoice = "download" | "quality" | "customize" | "info" | "convert-files";
@@ -194,20 +194,24 @@ export async function promptCustomize(
         }),
       maxDuration: () =>
         p.text({
-          message: "Duração máxima em segundos? (vazio = sem limite)",
+          message:
+            "Duração máxima em segundos? (vazio = sem limite, máx 12h — sempre as mais recentes)",
           defaultValue: "",
           placeholder: "sem limite",
-          validate: (v) => validatePositiveInteger(v, "Duração máxima"),
+          validate: (v) =>
+            validateOptionalInteger(v.trim(), 1, 12 * 3600, "Duração máxima"),
         }),
       retries: () =>
         p.text({
           message: "Tentativas por segmento (0-20):",
+          defaultValue: String(defaults.retries),
           placeholder: String(defaults.retries),
           validate: (v) => validateInteger(v, 0, 20, "Tentativas"),
         }),
       timeout: () =>
         p.text({
           message: "Timeout por requisição em segundos (5-300):",
+          defaultValue: String(defaults.timeout),
           placeholder: String(defaults.timeout),
           validate: (v) => validateInteger(v, 5, 300, "Timeout"),
         }),

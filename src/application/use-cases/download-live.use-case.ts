@@ -426,6 +426,7 @@ export class DownloadLiveUseCase {
     let knownMissingUntilSq: number | undefined;
 
     if (task.maxDurationSeconds !== null) {
+      // Sempre as N horas mais recentes: [latestSq - maxSegments + 1, latestSq]
       const maxSegments = Math.max(1, Math.ceil(task.maxDurationSeconds / 5));
       startSq = Math.max(earliestSq, latestSq - maxSegments + 1);
       return { startSq, endSq };
