@@ -40,27 +40,26 @@ export class HttpSegmentDownloaderAdapter implements SegmentDownloader {
       options.refreshVideoUrl,
     );
 
-    const ffmpeg = Bun.spawn(
-      [
-        ffmpegBinary,
-        "-hide_banner",
-        "-loglevel",
-        "warning",
-        "-fflags",
-        "+genpts+discardcorrupt",
-        "-y",
-        "-i",
-        "pipe:0",
-        "-c",
-        "copy",
-        "-f",
-        "mp4",
-        "-avoid_negative_ts",
-        "make_zero",
-        "-movflags",
-        "+faststart",
-        options.outputPath,
-      ],
+    const ffmpegArgs = [
+      ffmpegBinary,
+      "-hide_banner",
+      "-loglevel",
+      "warning",
+      "-fflags",
+      "+genpts+discardcorrupt",
+      "-y",
+      "-i",
+      "pipe:0",
+      "-c",
+      "copy",
+      "-f",
+      "mp4",
+      "-avoid_negative_ts",
+      "make_zero",
+      ...(options.skipFaststart ? [] : ["-movflags", "+faststart"]),
+      options.outputPath,
+    ];
+    const ffmpeg = Bun.spawn(ffmpegArgs,
       { stdin: "pipe", stdout: "ignore", stderr: "inherit" },
     );
 

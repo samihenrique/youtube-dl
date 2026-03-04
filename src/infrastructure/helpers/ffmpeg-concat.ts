@@ -38,6 +38,8 @@ export async function concatMediaFiles(
         listPath,
         "-c",
         "copy",
+        "-movflags",
+        "+faststart",
         "-y",
         outputPath,
       ],

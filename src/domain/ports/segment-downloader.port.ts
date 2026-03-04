@@ -14,6 +14,7 @@ export interface SegmentDownloaderOptions {
   readonly knownMissingUntilSq?: number;
   readonly refreshVideoUrl?: () => Promise<string>;
   readonly refreshAudioUrl?: () => Promise<string>;
+  readonly skipFaststart?: boolean;
 }
 
 export interface SegmentDownloader {

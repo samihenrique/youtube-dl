@@ -347,6 +347,7 @@ export class DownloadLiveUseCase {
           refreshVideoUrl,
           refreshAudioUrl,
           knownMissingUntilSq: i === 0 ? knownMissingUntilSq : undefined,
+          skipFaststart: true,
         },
         (progress) =>
           this.reporter.update(
@@ -586,6 +587,7 @@ export class DownloadLiveUseCase {
           estimatedTotalBytes: undefined,
           refreshVideoUrl: refreshTemplate,
           knownMissingUntilSq: i === 0 ? knownMissingUntilSq : undefined,
+          skipFaststart: true,
         },
         (progress) =>
           this.reporter.update(
