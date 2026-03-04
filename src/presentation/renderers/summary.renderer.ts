@@ -93,11 +93,7 @@ export function renderDownloadSummary(opts: SummaryOptions): void {
   }
 
   if (opts.conversion) {
-    if (opts.conversion.extractAudio) {
-      details.push(["Conversão", `Extrair áudio (${opts.conversion.extractAudio.toUpperCase()})`]);
-    } else {
-      details.push(["Conversão", `${opts.conversion.outputFormat.toUpperCase()}`]);
-    }
+    details.push(["Conversão", `${opts.conversion.outputFormat.toUpperCase()}`]);
   }
 
   details.push(["Concorrência", `${opts.concurrency} downloads paralelos`]);

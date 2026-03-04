@@ -7,11 +7,11 @@ Ultra-fast YouTube video and live stream downloader CLI with conversion support.
 - **Interactive CLI** with beautiful prompts powered by [@clack/prompts](https://github.com/bombshell-dev/clack)
 - **YouTube Live support** with DVR via DASH (download from the beginning) and live-now modes
 - **Parallel segment downloads** with configurable concurrency (up to 16)
-- **Post-download conversion** via ffmpeg (format, codec, bitrate, resolution, trim, extract audio)
+- **Post-download conversion** via ffmpeg (format, codec, bitrate, resolution)
 - **Batch file conversion** — convert existing local video files without downloading
 - **Hardware acceleration** — NVIDIA NVENC, Intel QSV, AMD/Intel VAAPI, Apple VideoToolbox
 - **Real-time hardware monitoring** — CPU and GPU usage during conversion
-- **Conversion presets** — quick MP3 extract, MP4 optimized, Shrink 720p, or fully custom
+- **Conversion presets** — MP4 optimized, Shrink 720p, Rápido 480p, or fully custom
 - **Rigorous input validation** on every parameter
 - **Clean Architecture** with full separation of concerns
 - **Typed error hierarchy** with actionable messages — no suppressed errors
@@ -99,17 +99,13 @@ You can also set `YOUTUBE_LIVE_URL` as an environment variable as a fallback whe
 |------|-------------|---------|
 | `--convert` | Enable post-download conversion | off |
 | `--format <f>` | Output format: `mp4`, `mkv`, `webm`, `avi`, `mov` | mp4 |
-| `--extract-audio <f>` | Extract audio: `mp3`, `aac`, `opus`, `flac`, `wav`, `ogg` | — |
 | `--video-codec <c>` | `copy`, `h264`, `h265`, `vp9`, `av1` | copy |
 | `--audio-codec <c>` | `copy`, `aac`, `opus`, `mp3`, `flac` | copy |
 | `--video-bitrate <b>` | Video bitrate (e.g., `5M`) | auto |
 | `--audio-bitrate <b>` | Audio bitrate (e.g., `192k`) | auto |
 | `--resolution <r>` | Resolution (e.g., `1920x1080` or `720p`) | original |
 | `--fps <n>` | Frame rate (1-120) | original |
-| `--trim-start <t>` | Trim start (HH:MM:SS) | — |
-| `--trim-end <t>` | Trim end (HH:MM:SS) | — |
 | `--no-audio` | Remove audio track | off |
-| `--no-video` | Remove video track | off |
 | `--crf <n>` | Quality (0-51, lower=better, NVENC: 0-51, CPU: 0-63) | 23 |
 
 #### Encoding performance
@@ -139,7 +135,6 @@ When converting in interactive mode, quick presets are available:
 
 | Preset | Description |
 |--------|-------------|
-| MP3 | Extract audio as MP3 @ 192k |
 | MP4 otimizado | H.264 + AAC @ 192k, CRF 23, hardware auto |
 | Reduzir 720p | H.264 @ 1280×720 30fps, CRF 28, AAC @ 128k |
 | **⚡ Rápido 480p** | **H.264 @ 854×480 30fps, CRF 30, no audio, ultrafast preset, hardware auto** |
@@ -178,7 +173,7 @@ src/
 bun test
 ```
 
-152 tests covering domain validation, use case orchestration, infrastructure helpers, and input validators.
+128 tests covering domain validation, use case orchestration, infrastructure helpers, and input validators.
 
 ## License
 

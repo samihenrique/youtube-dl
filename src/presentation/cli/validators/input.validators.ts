@@ -3,8 +3,6 @@ const YOUTUBE_URL_REGEX =
 
 const BITRATE_REGEX = /^\d+(?:\.\d+)?\s*[kmKM]$/;
 
-const TIMECODE_REGEX = /^\d{1,2}:\d{2}:\d{2}$/;
-
 const RESOLUTION_PRESET_REGEX = /^\d+p$/i;
 const RESOLUTION_WXH_REGEX = /^\d+x\d+$/i;
 
@@ -68,24 +66,6 @@ export function validateBitrate(value: string): string | undefined {
   if (!BITRATE_REGEX.test(trimmed)) {
     return "Formato inválido. Usa algo como 5M, 192k ou 2500K";
   }
-  return undefined;
-}
-
-export function validateTimeCode(value: string): string | undefined {
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-
-  if (!TIMECODE_REGEX.test(trimmed)) {
-    return "Formato inválido. Usa HH:MM:SS (ex: 01:30:00)";
-  }
-
-  const parts = trimmed.split(":").map(Number);
-  const minutes = parts[1]!;
-  const seconds = parts[2]!;
-
-  if (minutes > 59) return "Minutos precisam ser entre 00 e 59";
-  if (seconds > 59) return "Segundos precisam ser entre 00 e 59";
-
   return undefined;
 }
 

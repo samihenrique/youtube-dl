@@ -45,5 +45,5 @@ src/
 - **CLI prompts:** `@clack/prompts` with `picocolors` for styling
 - **ffmpeg:** System install preferred, falls back to `ffmpeg-static` package
 - **Error handling:** Typed error hierarchy extending `DomainError` (with `.code` property). All domain errors in `domain/errors/`.
-- **Value objects:** Self-validating (e.g., `VideoUrl`, `VideoId`, `Bitrate`, `TimeRange`) — validation lives in constructors.
+- **Value objects:** Self-validating (e.g., `VideoUrl`, `VideoId`, `Bitrate`) — validation lives in constructors.
 - **Language:** UI strings and log messages are in Portuguese (pt-BR).

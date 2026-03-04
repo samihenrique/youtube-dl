@@ -4,7 +4,6 @@ import { FilenamePattern } from "../../domain/enums/filename-pattern.ts";
 import { HardwareAccel } from "../../domain/enums/hardware-accel.ts";
 import { OverwriteBehavior } from "../../domain/enums/overwrite-behavior.ts";
 import { OutputFormat } from "../../domain/enums/output-format.ts";
-import { AudioFormat } from "../../domain/enums/audio-format.ts";
 import { VideoCodec } from "../../domain/enums/video-codec.ts";
 import { AudioCodec } from "../../domain/enums/audio-codec.ts";
 import { InvalidInputError } from "../../domain/errors/invalid-input.error.ts";
@@ -23,17 +22,13 @@ export interface ParsedArgs {
   overwrite: OverwriteBehavior;
   convert: boolean;
   format: OutputFormat;
-  extractAudio: AudioFormat | null;
   videoCodec: VideoCodec;
   audioCodec: AudioCodec;
   videoBitrate: string | null;
   audioBitrate: string | null;
   resolution: string | null;
   fps: number | null;
-  trimStart: string | null;
-  trimEnd: string | null;
   noAudio: boolean;
-  noVideo: boolean;
   infoOnly: boolean;
   interactive: boolean;
   hardwareAccel: HardwareAccel;
@@ -175,25 +170,6 @@ export function parseArgs(argv: string[]): ParsedArgs {
       OutputFormat.Mp4,
       "Formato",
     ),
-    extractAudio: (() => {
-      const raw = findFlag(args, "--extract-audio");
-      if (!raw) return null;
-      const valid = [
-        AudioFormat.Mp3,
-        AudioFormat.Aac,
-        AudioFormat.Opus,
-        AudioFormat.Flac,
-        AudioFormat.Wav,
-        AudioFormat.Ogg,
-      ] as const;
-      if (!valid.includes(raw as AudioFormat)) {
-        throw new InvalidInputError(
-          "Formato de áudio",
-          `deve ser um de: ${valid.join(", ")}`,
-        );
-      }
-      return raw as AudioFormat;
-    })(),
     videoCodec: parseEnum(
       args,
       "--video-codec",
@@ -232,10 +208,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       }
       return num;
     })(),
-    trimStart: findFlag(args, "--trim-start"),
-    trimEnd: findFlag(args, "--trim-end"),
     noAudio: hasFlag(args, "--no-audio"),
-    noVideo: hasFlag(args, "--no-video"),
     infoOnly: hasFlag(args, "--info-only"),
     interactive,
     hardwareAccel: parseEnum(

@@ -2,20 +2,15 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import type { ConversionTask } from "../../../domain/entities/conversion-task.ts";
 import { AudioCodec } from "../../../domain/enums/audio-codec.ts";
-import { AudioFormat } from "../../../domain/enums/audio-format.ts";
 import { EncodingPreset } from "../../../domain/enums/encoding-preset.ts";
 import { HardwareAccel } from "../../../domain/enums/hardware-accel.ts";
 import { OutputFormat } from "../../../domain/enums/output-format.ts";
 import { VideoCodec } from "../../../domain/enums/video-codec.ts";
 import type { HardwareDetector } from "../../../domain/ports/hardware-detector.port.ts";
 import { Bitrate } from "../../../domain/value-objects/bitrate.ts";
-import { TimeRange } from "../../../domain/value-objects/time-range.ts";
-import {
-  validateBitrate,
-  validateTimeCode,
-} from "../validators/input.validators.ts";
+import { validateBitrate } from "../validators/input.validators.ts";
 
-type ConversionPreset = "mp3" | "mp4-optimized" | "shrink-720p" | "fast-480p" | "custom" | "none";
+type ConversionPreset = "mp4-optimized" | "shrink-720p" | "fast-480p" | "custom" | "none";
 
 function onCancel(): never {
   p.cancel("Tudo bem, até a próxima!");
@@ -47,11 +42,6 @@ export async function promptConversion(
           hint: "mais rápido",
         },
         {
-          value: "mp3",
-          label: "Extrair só o áudio (MP3)",
-          hint: "ideal pra músicas e podcasts",
-        },
-        {
           value: "mp4-optimized",
           label: "MP4 otimizado (H.264 + AAC)",
           hint: "compatível com tudo",
@@ -69,7 +59,7 @@ export async function promptConversion(
         {
           value: "custom",
           label: "Personalizar conversão",
-          hint: "codec, bitrate, resolução, corte...",
+          hint: "codec, bitrate, resolução...",
         },
       ],
     }),
@@ -79,9 +69,6 @@ export async function promptConversion(
 
   let task: ConversionTask;
   switch (preset) {
-    case "mp3":
-      task = createMp3Preset();
-      break;
     case "mp4-optimized":
       task = createMp4Preset();
       break;
@@ -241,39 +228,16 @@ async function promptCustomPerformance(
   };
 }
 
-function createMp3Preset(): ConversionTask {
-  return {
-    outputFormat: OutputFormat.Mp4,
-    extractAudio: AudioFormat.Mp3,
-    videoCodec: VideoCodec.Copy,
-    audioCodec: AudioCodec.Mp3,
-    videoBitrate: null,
-    audioBitrate: new Bitrate("192k"),
-    resolution: null,
-    fps: null,
-    timeRange: new TimeRange(null, null),
-    noAudio: false,
-    noVideo: false,
-    hardwareAccel: HardwareAccel.None,
-    threads: null,
-    preset: EncodingPreset.Medium,
-    crf: null,
-  };
-}
-
 function createMp4Preset(): ConversionTask {
   return {
     outputFormat: OutputFormat.Mp4,
-    extractAudio: null,
     videoCodec: VideoCodec.H264,
     audioCodec: AudioCodec.Aac,
     videoBitrate: null,
     audioBitrate: new Bitrate("192k"),
     resolution: null,
     fps: null,
-    timeRange: new TimeRange(null, null),
     noAudio: false,
-    noVideo: false,
     hardwareAccel: HardwareAccel.Auto,
     threads: null,
     preset: EncodingPreset.Fast,
@@ -284,16 +248,13 @@ function createMp4Preset(): ConversionTask {
 function createShrinkPreset(): ConversionTask {
   return {
     outputFormat: OutputFormat.Mp4,
-    extractAudio: null,
     videoCodec: VideoCodec.H264,
     audioCodec: AudioCodec.Aac,
     videoBitrate: null,
     audioBitrate: new Bitrate("128k"),
     resolution: "1280x720",
     fps: 30,
-    timeRange: new TimeRange(null, null),
     noAudio: false,
-    noVideo: false,
     hardwareAccel: HardwareAccel.Auto,
     threads: null,
     preset: EncodingPreset.Fast,
@@ -304,20 +265,17 @@ function createShrinkPreset(): ConversionTask {
 function createFast480pPreset(): ConversionTask {
   return {
     outputFormat: OutputFormat.Mp4,
-    extractAudio: null,
     videoCodec: VideoCodec.H264,
     audioCodec: AudioCodec.Copy,
     videoBitrate: null,
     audioBitrate: null,
     resolution: "854x480",
     fps: 30,
-    timeRange: new TimeRange(null, null),
-    noAudio: true, // Remove áudio para máxima velocidade
-    noVideo: false,
-    hardwareAccel: HardwareAccel.Auto, // Usa GPU automaticamente se disponível
+    noAudio: true,
+    hardwareAccel: HardwareAccel.Auto,
     threads: null,
-    preset: EncodingPreset.Ultrafast, // Preset mais rápido
-    crf: 30, // CRF mais alto = mais compressão, menor arquivo
+    preset: EncodingPreset.Ultrafast,
+    crf: 30,
   };
 }
 
@@ -335,56 +293,29 @@ async function promptCustomConversion(): Promise<ConversionTask> {
             { value: OutputFormat.Mov, label: "MOV" },
           ],
         }),
-      extractAudio: () =>
-        p.select({
-          message: "Extrair somente áudio?",
-          options: [
-            { value: "no" as const, label: "Não, manter vídeo" },
-            { value: AudioFormat.Mp3, label: "MP3" },
-            { value: AudioFormat.Aac, label: "AAC" },
-            { value: AudioFormat.Opus, label: "Opus" },
-            { value: AudioFormat.Flac, label: "FLAC" },
-            { value: AudioFormat.Wav, label: "WAV" },
-            { value: AudioFormat.Ogg, label: "OGG" },
-          ],
-        }),
     },
     { onCancel },
   );
 
-  const extractAudio =
-    base.extractAudio === "no" ? null : (base.extractAudio as AudioFormat);
-
-  let videoCodec: VideoCodec = VideoCodec.Copy;
   let videoBitrate: Bitrate | null = null;
   let crf: number | null = null;
   let resolution: string | null = null;
   let fps: number | null = null;
-  let noVideo = false;
 
-  if (!extractAudio) {
-    noVideo = cancelGuard(
-      await p.confirm({
-        message: "Remover faixa de vídeo?",
-        initialValue: false,
-      }),
-    );
+  const videoCodec = cancelGuard(
+    await p.select({
+      message: "Codec de vídeo:",
+      options: [
+        { value: VideoCodec.Copy, label: "Copy", hint: "sem recodificação" },
+        { value: VideoCodec.H264, label: "H.264" },
+        { value: VideoCodec.H265, label: "H.265 / HEVC" },
+        { value: VideoCodec.Vp9, label: "VP9" },
+        { value: VideoCodec.Av1, label: "AV1", hint: "mais lento, melhor compressão" },
+      ],
+    }),
+  ) as VideoCodec;
 
-    if (!noVideo) {
-      videoCodec = cancelGuard(
-        await p.select({
-          message: "Codec de vídeo:",
-          options: [
-            { value: VideoCodec.Copy, label: "Copy", hint: "sem recodificação" },
-            { value: VideoCodec.H264, label: "H.264" },
-            { value: VideoCodec.H265, label: "H.265 / HEVC" },
-            { value: VideoCodec.Vp9, label: "VP9" },
-            { value: VideoCodec.Av1, label: "AV1", hint: "mais lento, melhor compressão" },
-          ],
-        }),
-      ) as VideoCodec;
-
-      if (videoCodec !== VideoCodec.Copy) {
+  if (videoCodec !== VideoCodec.Copy) {
         const qualityMode = cancelGuard(
           await p.select({
             message: "Controle de qualidade do vídeo:",
@@ -455,22 +386,16 @@ async function promptCustomConversion(): Promise<ConversionTask> {
           }),
         );
         fps = fpsChoice || null;
-      }
-    }
   }
 
   let audioCodec: AudioCodec = AudioCodec.Copy;
   let audioBitrate: Bitrate | null = null;
-  let noAudio = false;
-
-  if (!extractAudio && !noVideo) {
-    noAudio = cancelGuard(
-      await p.confirm({
-        message: "Remover faixa de áudio?",
-        initialValue: false,
-      }),
-    );
-  }
+  const noAudio = cancelGuard(
+    await p.confirm({
+      message: "Remover faixa de áudio?",
+      initialValue: false,
+    }),
+  );
 
   if (!noAudio) {
     audioCodec = cancelGuard(
@@ -501,52 +426,15 @@ async function promptCustomConversion(): Promise<ConversionTask> {
     }
   }
 
-  const wantTrim = cancelGuard(
-    await p.confirm({
-      message: "Quer cortar um trecho específico?",
-      initialValue: false,
-    }),
-  );
-
-  let trimStart: string | null = null;
-  let trimEnd: string | null = null;
-
-  if (wantTrim) {
-    const trim = await p.group(
-      {
-        trimStart: () =>
-          p.text({
-            message: "Início do corte (HH:MM:SS, vazio = desde o começo):",
-            defaultValue: "",
-            placeholder: "00:00:00",
-            validate: validateTimeCode,
-          }),
-        trimEnd: () =>
-          p.text({
-            message: "Fim do corte (HH:MM:SS, vazio = até o final):",
-            defaultValue: "",
-            placeholder: "até o final",
-            validate: validateTimeCode,
-          }),
-      },
-      { onCancel },
-    );
-    trimStart = trim.trimStart.trim() || null;
-    trimEnd = trim.trimEnd.trim() || null;
-  }
-
   return {
     outputFormat: base.outputFormat,
-    extractAudio,
     videoCodec,
     audioCodec,
     videoBitrate,
     audioBitrate,
     resolution,
     fps,
-    timeRange: new TimeRange(trimStart, trimEnd),
     noAudio,
-    noVideo,
     hardwareAccel: HardwareAccel.Auto,
     threads: null,
     preset: EncodingPreset.Medium,
@@ -556,16 +444,13 @@ async function promptCustomConversion(): Promise<ConversionTask> {
 
 export function buildConversionTask(options: {
   outputFormat: OutputFormat;
-  extractAudio: AudioFormat | null;
   videoCodec: VideoCodec;
   audioCodec: AudioCodec;
   videoBitrate: Bitrate | null;
   audioBitrate: Bitrate | null;
   resolution: string | null;
   fps: number | null;
-  timeRange: TimeRange;
   noAudio: boolean;
-  noVideo: boolean;
   hardwareAccel?: HardwareAccel;
   threads?: number | null;
   preset?: EncodingPreset;
@@ -573,16 +458,13 @@ export function buildConversionTask(options: {
 }): ConversionTask {
   return {
     outputFormat: options.outputFormat,
-    extractAudio: options.extractAudio,
     videoCodec: options.videoCodec,
     audioCodec: options.audioCodec,
     videoBitrate: options.videoBitrate,
     audioBitrate: options.audioBitrate,
     resolution: options.resolution,
     fps: options.fps,
-    timeRange: options.timeRange,
     noAudio: options.noAudio,
-    noVideo: options.noVideo,
     hardwareAccel: options.hardwareAccel ?? HardwareAccel.Auto,
     threads: options.threads ?? null,
     preset: options.preset ?? EncodingPreset.Medium,

@@ -1,5 +1,4 @@
 export { AudioCodec } from "./audio-codec.ts";
-export { AudioFormat } from "./audio-format.ts";
 export { DownloadMode } from "./download-mode.ts";
 export { EncodingPreset } from "./encoding-preset.ts";
 export { FilenamePattern } from "./filename-pattern.ts";

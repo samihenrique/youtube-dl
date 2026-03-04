@@ -7,7 +7,6 @@ import { EncodingPreset } from "../../domain/enums/encoding-preset.ts";
 import { HardwareAccel } from "../../domain/enums/hardware-accel.ts";
 import { OutputFormat } from "../../domain/enums/output-format.ts";
 import { VideoCodec } from "../../domain/enums/video-codec.ts";
-import { TimeRange } from "../../domain/value-objects/time-range.ts";
 import { ConversionFailedError } from "../../domain/errors/conversion-failed.error.ts";
 
 function createMockConverter(): MediaConverter {
@@ -20,16 +19,13 @@ function createMockConverter(): MediaConverter {
 
 const sampleTask: ConversionTask = {
   outputFormat: OutputFormat.Mp4,
-  extractAudio: null,
   videoCodec: VideoCodec.H264,
   audioCodec: AudioCodec.Aac,
   videoBitrate: null,
   audioBitrate: null,
   resolution: null,
   fps: null,
-  timeRange: new TimeRange(null, null),
   noAudio: false,
-  noVideo: false,
   hardwareAccel: HardwareAccel.None,
   threads: null,
   preset: EncodingPreset.Medium,

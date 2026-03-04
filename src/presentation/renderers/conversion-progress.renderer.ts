@@ -51,8 +51,8 @@ export class ConversionProgressRenderer {
     }
 
     const outputParts: string[] = [];
-    outputParts.push((task.extractAudio ?? task.outputFormat).toUpperCase());
-    if (!task.extractAudio && task.videoCodec !== VideoCodec.Copy) {
+    outputParts.push(task.outputFormat.toUpperCase());
+    if (task.videoCodec !== VideoCodec.Copy) {
       outputParts.push(task.videoCodec.toUpperCase());
     }
     if (task.crf !== null) {

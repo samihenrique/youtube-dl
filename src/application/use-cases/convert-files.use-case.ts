@@ -51,7 +51,7 @@ export class ConvertFilesUseCase {
       console.log();
 
       try {
-        const ext = task.extractAudio ?? task.outputFormat;
+        const ext = task.outputFormat;
         const outputPath = this.getOutputPath(inputPath, ext);
 
         await this.convertWithProgress(inputPath, outputPath, task);

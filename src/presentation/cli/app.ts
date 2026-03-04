@@ -8,7 +8,6 @@ import { DownloadMode } from "../../domain/enums/download-mode.ts";
 import { VideoType } from "../../domain/enums/video-type.ts";
 import type { HardwareDetector } from "../../domain/ports/hardware-detector.port.ts";
 import { Bitrate } from "../../domain/value-objects/bitrate.ts";
-import { TimeRange } from "../../domain/value-objects/time-range.ts";
 import type { ConvertFilesUseCase } from "../../application/use-cases/convert-files.use-case.ts";
 import type { ConvertMediaUseCase } from "../../application/use-cases/convert-media.use-case.ts";
 import type { DownloadLiveUseCase } from "../../application/use-cases/download-live.use-case.ts";
@@ -282,10 +281,9 @@ export class CliApp {
     if (conversion && outputPath) {
       p.log.step(pc.cyan(`[2/${totalSteps}]`) + " Convertendo...");
 
-      const ext = conversion.extractAudio ?? conversion.outputFormat;
       const convertedPath = outputPath.replace(
         /\.[^.]+$/,
-        `.converted.${ext}`,
+        `.converted.${conversion.outputFormat}`,
       );
       await this.deps.convertMedia.execute(
         outputPath,
@@ -397,16 +395,13 @@ export class CliApp {
     if (args.convert) {
       conversion = buildConversionTask({
         outputFormat: args.format,
-        extractAudio: args.extractAudio,
         videoCodec: args.videoCodec,
         audioCodec: args.audioCodec,
         videoBitrate: args.videoBitrate ? new Bitrate(args.videoBitrate) : null,
         audioBitrate: args.audioBitrate ? new Bitrate(args.audioBitrate) : null,
         resolution: args.resolution,
         fps: args.fps,
-        timeRange: new TimeRange(args.trimStart, args.trimEnd),
         noAudio: args.noAudio,
-        noVideo: args.noVideo,
         hardwareAccel: args.hardwareAccel,
         threads: args.threads,
         preset: args.preset,
@@ -434,10 +429,9 @@ export class CliApp {
     const outputPath = await this.executeDownload(task);
 
     if (conversion && outputPath) {
-      const ext = conversion.extractAudio ?? conversion.outputFormat;
       const convertedPath = outputPath.replace(
         /\.[^.]+$/,
-        `.converted.${ext}`,
+        `.converted.${conversion.outputFormat}`,
       );
       await this.deps.convertMedia.execute(
         outputPath,

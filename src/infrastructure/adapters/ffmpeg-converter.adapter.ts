@@ -334,69 +334,53 @@ export class FfmpegConverterAdapter implements MediaConverter {
       }
     }
 
-    if (!task.timeRange.isEmpty) {
-      args.push(...task.timeRange.toFfmpegArgs());
-    }
-
+    // Tolerância a gaps/corrupção (ex.: DVR com segmentos falhos)
+    args.push("-fflags", "+genpts+discardcorrupt");
     args.push("-i", inputPath);
 
     if (task.threads !== null && task.threads > 0 && !useHwAccel) {
       args.push("-threads", String(task.threads));
     }
 
-    if (task.extractAudio) {
-      args.push("-vn");
-      const codec = AUDIO_CODEC_MAP[task.audioCodec] ?? "copy";
-      args.push("-c:a", codec);
+    const vCodec = this.getVideoCodec(task);
+    args.push("-c:v", vCodec);
+
+    // Otimização: usar filtros CUDA para NVIDIA quando aplicável
+    if (task.resolution && task.videoCodec !== VideoCodec.Copy) {
+      const scaleFilter = useHwAccel && task.hardwareAccel === HardwareAccel.Nvenc
+        ? this.getCudaScaleFilter(task.resolution)
+        : `scale=${this.parseResolution(task.resolution)}`;
+      args.push("-vf", scaleFilter);
+    }
+
+    if (task.fps !== null && task.videoCodec !== VideoCodec.Copy) {
+      args.push("-r", String(task.fps));
+    }
+
+    if (task.videoCodec !== VideoCodec.Copy) {
+      // CRF/quality control: takes precedence over fixed bitrate
+      if (task.crf !== null) {
+        this.applyCrfArg(args, vCodec, task.crf, task.hardwareAccel);
+      } else if (task.videoBitrate) {
+        args.push("-b:v", task.videoBitrate.toFfmpegArg());
+      } else {
+        // Fallback: aplicar CRF padrão para evitar bitrate ilimitado
+        const defaultCrf = useHwAccel ? 28 : 23;
+        this.applyCrfArg(args, vCodec, defaultCrf, task.hardwareAccel);
+      }
+
+      const presetStr = PRESET_MAP[task.preset] ?? (useHwAccel ? "fast" : "medium");
+      args.push("-preset", presetStr);
+    }
+
+    if (task.noAudio) {
+      args.push("-an");
+    } else {
+      const aCodec = AUDIO_CODEC_MAP[task.audioCodec] ?? "copy";
+      args.push("-c:a", aCodec);
+
       if (task.audioBitrate && task.audioCodec !== AudioCodec.Copy) {
         args.push("-b:a", task.audioBitrate.toFfmpegArg());
-      }
-    } else {
-      if (task.noVideo) {
-        args.push("-vn");
-      } else {
-        const vCodec = this.getVideoCodec(task);
-        args.push("-c:v", vCodec);
-
-        // Otimização: usar filtros CUDA para NVIDIA quando aplicável
-        if (task.resolution && task.videoCodec !== VideoCodec.Copy) {
-          const scaleFilter = useHwAccel && task.hardwareAccel === HardwareAccel.Nvenc
-            ? this.getCudaScaleFilter(task.resolution)
-            : `scale=${this.parseResolution(task.resolution)}`;
-          args.push("-vf", scaleFilter);
-        }
-
-        if (task.fps !== null && task.videoCodec !== VideoCodec.Copy) {
-          args.push("-r", String(task.fps));
-        }
-
-        if (task.videoCodec !== VideoCodec.Copy) {
-          // CRF/quality control: takes precedence over fixed bitrate
-          if (task.crf !== null) {
-            this.applyCrfArg(args, vCodec, task.crf, task.hardwareAccel);
-          } else if (task.videoBitrate) {
-            args.push("-b:v", task.videoBitrate.toFfmpegArg());
-          } else {
-            // Fallback: aplicar CRF padrão para evitar bitrate ilimitado
-            const defaultCrf = useHwAccel ? 28 : 23;
-            this.applyCrfArg(args, vCodec, defaultCrf, task.hardwareAccel);
-          }
-
-          const presetStr = PRESET_MAP[task.preset] ?? (useHwAccel ? "fast" : "medium");
-          args.push("-preset", presetStr);
-        }
-      }
-
-      if (task.noAudio) {
-        args.push("-an");
-      } else {
-        // Otimização: copiar áudio se possível para economizar CPU
-        const aCodec = AUDIO_CODEC_MAP[task.audioCodec] ?? "copy";
-        args.push("-c:a", aCodec);
-
-        if (task.audioBitrate && task.audioCodec !== AudioCodec.Copy) {
-          args.push("-b:a", task.audioBitrate.toFfmpegArg());
-        }
       }
     }
 

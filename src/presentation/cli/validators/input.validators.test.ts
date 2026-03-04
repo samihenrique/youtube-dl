@@ -5,7 +5,6 @@ import {
   validateOptionalInteger,
   validatePositiveInteger,
   validateBitrate,
-  validateTimeCode,
   validateResolution,
   validatePath,
 } from "./input.validators.ts";
@@ -67,21 +66,6 @@ describe("validateBitrate", () => {
   test("aceita 2500K", () => expect(validateBitrate("2500K")).toBeUndefined());
   test("rejeita sem unidade", () => expect(validateBitrate("500")).toBeDefined());
   test("rejeita texto", () => expect(validateBitrate("rapido")).toBeDefined());
-});
-
-describe("validateTimeCode", () => {
-  test("aceita vazio (opcional)", () =>
-    expect(validateTimeCode("")).toBeUndefined());
-  test("aceita 01:30:00", () =>
-    expect(validateTimeCode("01:30:00")).toBeUndefined());
-  test("aceita 0:00:00", () =>
-    expect(validateTimeCode("0:00:00")).toBeUndefined());
-  test("rejeita minutos > 59", () =>
-    expect(validateTimeCode("00:60:00")).toBeDefined());
-  test("rejeita segundos > 59", () =>
-    expect(validateTimeCode("00:00:60")).toBeDefined());
-  test("rejeita formato errado", () =>
-    expect(validateTimeCode("1:2:3")).toBeDefined());
 });
 
 describe("validateResolution", () => {
