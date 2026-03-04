@@ -369,8 +369,15 @@ export class FfmpegConverterAdapter implements MediaConverter {
         this.applyCrfArg(args, vCodec, defaultCrf, task.hardwareAccel);
       }
 
-      const presetStr = PRESET_MAP[task.preset] ?? (useHwAccel ? "fast" : "medium");
-      args.push("-preset", presetStr);
+      if (NVENC_CODECS.has(vCodec)) {
+        // NVENC: preset p1 (mais rápido), tune ll, delay 0 para máxima velocidade
+        args.push("-preset", "p1");
+        args.push("-tune", "ll");
+        args.push("-delay", "0");
+      } else {
+        const presetStr = PRESET_MAP[task.preset] ?? (useHwAccel ? "fast" : "medium");
+        args.push("-preset", presetStr);
+      }
     }
 
     if (task.noAudio) {
